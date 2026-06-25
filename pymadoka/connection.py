@@ -9,7 +9,8 @@ import subprocess
 import sys
 from enum import Enum
 
-from bleak import BleakClient,BleakScanner,discover
+from bleak import BleakClient, BleakScanner
+discover = BleakScanner.discover
 from typing import Dict
 
 from pymadoka.transport import Transport, TransportDelegate
