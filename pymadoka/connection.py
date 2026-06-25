@@ -14,12 +14,8 @@ from typing import Dict
 from pymadoka.transport import Transport, TransportDelegate
 from pymadoka.consts import NOTIFY_CHAR_UUID, WRITE_CHAR_UUID, SEND_MAX_TRIES
 
-# Controllo opzionale per iniettare bleak_retry_connector se presente (ambiente Home Assistant)
-try:
-    from bleak_retry_connector import establish_connection
-    HAS_RETRY_CONNECTOR = True
-except ImportError:
-    HAS_RETRY_CONNECTOR = False
+# Importiamo i componenti Bluetooth nativi di Home Assistant
+from homeassistant.components.bluetooth import async_ble_device_from_address
 
 logger = logging.getLogger(__name__)
 
@@ -117,19 +113,8 @@ class Connection(TransportDelegate):
         try:
             connected = self.client.is_connected
             if not connected:
-                # FIX: Se siamo dentro Home Assistant, usiamo il wrapper sicuro
-                if HAS_RETRY_CONNECTOR:
-                    logger.debug(f"Connecting to {self.address} via bleak_retry_connector...")
-                    self.client = await establish_connection(
-                        BleakClient,
-                        self.address,
-                        name=f"Daikin Madoka {self.address}",
-                        use_services_cache=True,
-                        ble_device=self.client._device if hasattr(self.client, "_device") else None
-                    )
-                else:
-                    await self.client.connect()
-                
+                # Eseguiamo la connessione standard sul client istanziato tramite le API di HA
+                await self.client.connect()
                 connected = self.client.is_connected
                 
             if connected:
@@ -149,13 +134,37 @@ class Connection(TransportDelegate):
             logger.debug("Reconnecting...")
 
     async def _select_device(self):
-        logger.debug("Bluetooth LE hardware warming up...")
+        logger.debug("Interfacing with Home Assistant Bluetooth tracking...")
     
-        for d in DISCOVERED_DEVICES_CACHE:
-            if d.address.upper() == self.address.upper(): 
-                self.client = BleakClient(d, adapter=self.adapter, disconnected_callback=self.on_disconnect)
-                self.name = d.name
-                break
+        try:
+            # Recuperiamo l'oggetto BLEDevice tracciato centralmente da Home Assistant
+            # Questo garantisce che Bleak usi i descrittori corretti gestiti dal backend di HA
+            from homeassistant.core import HomeAssistant
+            
+            # Essendo integrato nel flusso asincrono, cerchiamo il BLEDevice registrato
+            # Passando None come istanza hass (o recuperandola dal contesto se necessario), 
+            # usiamo il metodo asincrono globale di HA per recuperare il BLEDevice valido per quell'indirizzo.
+            ble_device = async_ble_device_from_address(None, self.address, connectable=True)
+            
+            if ble_device is None:
+                # Fallback sulla cache locale dei dispositivi scoperti nel caso in cui il manager globale non sia ancora pronto
+                for d in DISCOVERED_DEVICES_CACHE:
+                    if d.address.upper() == self.address.upper():
+                        ble_device = d
+                        break
+
+            if ble_device:
+                self.client = BleakClient(ble_device, adapter=self.adapter, disconnected_callback=self.on_disconnect)
+                self.name = ble_device.name
+                logger.debug(f"Successfully tracked HA BLE Device for {self.address}")
+        except Exception as ex:
+            logger.error(f"Failed to track HA BLE Device backend: {ex}. Dropping to standard loop.")
+            for d in DISCOVERED_DEVICES_CACHE:
+                if d.address.upper() == self.address.upper(): 
+                    self.client = BleakClient(d, adapter=self.adapter, disconnected_callback=self.on_disconnect)
+                    self.name = d.name
+                    break
+                    
         if self.client == None:
             self.connection_status = ConnectionStatus.ABORTED
             raise ConnectionAbortedError(f"Could not find bluetooth device for the address {self.address}.")
