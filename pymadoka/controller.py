@@ -32,21 +32,22 @@ class Controller:
         set_point (Feature): Feature used to control the fan speed
         clean_filter_indicator (Feature): Feature used to control the fan speed
     """
-    def __init__(self, address: str, adapter: str = "hci0", reconnect: bool = True):
+    def __init__(self, address: str, adapter: str = "hci0", reconnect: bool = True, hass=None, name: str = None):
         """Inits the controller with the device address.
 
         Args:
-            address (str): MAC address of the device  
+            address (str): MAC address of the device
             adapter (str): Bluetooth adapter for the connection
+            hass: Home Assistant instance (enables bleak_retry_connector path)
+            name (str): User-friendly display name for the device
         """
 
-     
         if adapter is None:
             adapter = "hci0"
-        
+
         self.status = {}
         self.info = {}
-        self.connection = Connection(address,adapter = adapter, reconnect=reconnect)
+        self.connection = Connection(address, adapter=adapter, reconnect=reconnect, hass=hass, name=name)
         
         self.fan_speed = FanSpeed(self.connection)
         self.operation_mode = OperationMode(self.connection)
