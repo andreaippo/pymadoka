@@ -74,14 +74,14 @@ class Controller:
         """ 
         
         for var in vars(self).values():
-            if isinstance(var,Feature): 
+            if isinstance(var,Feature):
                 try:
-                    # Small delay to avoid DBUS errors produced when calls are too quick
-                    await asyncio.sleep(0.3)
                     await var.query()
                 except NotImplementedException as e:
                     if not isinstance(var, ResetCleanFilterTimer):
-                        raise e                 
+                        raise e
+                except asyncio.TimeoutError:
+                    logger.warning(f"Query timed out for {var.__class__.__name__}, skipping")
                 except ConnectionAbortedError as e:
                     logger.debug(f"Connection aborted: {str(e)}")
                     raise e
