@@ -72,6 +72,8 @@ class Connection(TransportDelegate):
         self.current_future = None
         self.requests = {}
         self._is_starting = False
+        self._operation_lock = asyncio.Lock()
+        self._retry_delay = 5.0
 
     def on_disconnect(self, client: BleakClient):
         self.connection_status = ConnectionStatus.DISCONNECTED
@@ -147,11 +149,14 @@ class Connection(TransportDelegate):
                 max_attempts=3,
             )
             self.connection_status = ConnectionStatus.CONNECTED
+            self._retry_delay = 5.0  # reset backoff on successful connect
             await self.client.start_notify(NOTIFY_CHAR_UUID, self.notification_handler)
             logger.info(f"Connected to {self.address} ({self.name}) via bleak_retry_connector")
         except Exception as e:
             logger.error(f"Failed to connect to {self.address}: {e}")
-            await asyncio.sleep(2.0)
+            logger.info(f"Retrying {self.address} in {self._retry_delay:.0f}s")
+            await asyncio.sleep(self._retry_delay)
+            self._retry_delay = min(self._retry_delay * 2, 60.0)
 
     async def _connect(self):
         try:
