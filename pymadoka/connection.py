@@ -14,9 +14,6 @@ from typing import Dict
 from pymadoka.transport import Transport, TransportDelegate
 from pymadoka.consts import NOTIFY_CHAR_UUID, WRITE_CHAR_UUID, SEND_MAX_TRIES
 
-# Importiamo i componenti Bluetooth nativi di Home Assistant
-from homeassistant.components.bluetooth import async_ble_device_from_address
-
 logger = logging.getLogger(__name__)
 
 class ConnectionException(Exception):
@@ -30,18 +27,13 @@ class ConnectionStatus(Enum):
     CONNECTED = 2
     ABORTED = 3
 
-DISCOVERED_DEVICES_CACHE = []
-
 async def discover_devices(timeout=5, adapter="hci0", force_disconnect=True):
     """Trigger a bluetooth devices discovery on the adapter for the timeout interval."""
-    global DISCOVERED_DEVICES_CACHE
-
     scanner = BleakScanner(adapter=adapter)
     await scanner.start()
     await asyncio.sleep(timeout)
     await scanner.stop()
-    DISCOVERED_DEVICES_CACHE = scanner.discovered_devices
-    return DISCOVERED_DEVICES_CACHE
+    return scanner.discovered_devices
 
 async def force_device_disconnect(address):
     """Force a device disconnect so it can be listed during the scan."""
@@ -134,40 +126,12 @@ class Connection(TransportDelegate):
             logger.debug("Reconnecting...")
 
     async def _select_device(self):
-        logger.debug("Interfacing with Home Assistant Bluetooth tracking...")
-    
-        try:
-            # Recuperiamo l'oggetto BLEDevice tracciato centralmente da Home Assistant
-            # Questo garantisce che Bleak usi i descrittori corretti gestiti dal backend di HA
-            from homeassistant.core import HomeAssistant
-            
-            # Essendo integrato nel flusso asincrono, cerchiamo il BLEDevice registrato
-            # Passando None come istanza hass (o recuperandola dal contesto se necessario), 
-            # usiamo il metodo asincrono globale di HA per recuperare il BLEDevice valido per quell'indirizzo.
-            ble_device = async_ble_device_from_address(None, self.address, connectable=True)
-            
-            if ble_device is None:
-                # Fallback sulla cache locale dei dispositivi scoperti nel caso in cui il manager globale non sia ancora pronto
-                for d in DISCOVERED_DEVICES_CACHE:
-                    if d.address.upper() == self.address.upper():
-                        ble_device = d
-                        break
-
-            if ble_device:
-                self.client = BleakClient(ble_device, adapter=self.adapter, disconnected_callback=self.on_disconnect)
-                self.name = ble_device.name
-                logger.debug(f"Successfully tracked HA BLE Device for {self.address}")
-        except Exception as ex:
-            logger.error(f"Failed to track HA BLE Device backend: {ex}. Dropping to standard loop.")
-            for d in DISCOVERED_DEVICES_CACHE:
-                if d.address.upper() == self.address.upper(): 
-                    self.client = BleakClient(d, adapter=self.adapter, disconnected_callback=self.on_disconnect)
-                    self.name = d.name
-                    break
-                    
-        if self.client == None:
-            self.connection_status = ConnectionStatus.ABORTED
-            raise ConnectionAbortedError(f"Could not find bluetooth device for the address {self.address}.")
+        logger.debug(f"Creating BleakClient for {self.address}")
+        self.client = BleakClient(
+            self.address,
+            adapter=self.adapter,
+            disconnected_callback=self.on_disconnect,
+        )
 
     def notification_handler(self, sender: str, data: bytearray):
         self.transport.rebuild_chunk(data)
