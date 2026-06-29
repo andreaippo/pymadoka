@@ -47,7 +47,7 @@ class ResetCleanFilterTimer(Feature):
     
     def update_cmd_id(self)-> int:
         """See base class."""
-        16928
+        return 16928
 
     def new_status(self) -> FeatureStatus:
         """See base class."""
