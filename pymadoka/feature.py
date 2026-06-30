@@ -1,271 +1,210 @@
-"""This module implements the base class of the features supported by the device
+"""Base classes for device features.
+
+Each Feature subclass owns a FeatureStatus and knows the cmd_ids to query and
+update that status over BLE.  query() and update() are the only public entry
+points; they delegate all BLE work to Connection.send(), which serialises
+operations and manages retries, timeouts, and reconnection internally.
 """
 
-from abc import ABC, abstractmethod
 import asyncio
-import logging
 import json
+import logging
+from abc import ABC, abstractmethod
 from typing import Dict
 
-from asyncio.exceptions import CancelledError
-
-from pymadoka.connection import Connection, ConnectionException, ConnectionStatus
+# These re-exports must stay so that callers that do
+#   from pymadoka.feature import ConnectionException, ConnectionStatus
+# continue to work unchanged.
+from pymadoka.connection import (  # noqa: F401  (re-exported)
+    Connection,
+    ConnectionException,
+    ConnectionStatus,
+)
 
 logger = logging.getLogger(__name__)
 
+
 class ParseException(Exception):
-     pass
+    pass
+
 
 class NotImplementedException(Exception):
-     pass
+    pass
+
+
+# ---------------------------------------------------------------------------
+# FeatureStatus
+# ---------------------------------------------------------------------------
 
 class FeatureStatus(ABC):
-    """
-    This interface defines the methods used by the Transport to notify the result of the rebuild process.
-    """
+    """Serialisable snapshot of a single device feature."""
 
-    """This method must be implemented by subclasses to provide with the list of parameters used by the feature     
-    Returns:
-        Dict[int,bytearray]: Dictionary of parameter ids and values
-    """
     @abstractmethod
-    def get_values(self) -> Dict[int,bytearray]:
+    def get_values(self) -> Dict[int, bytearray]:
+        """Return a {param_id: param_bytes} mapping to be sent to the device."""
         pass
 
-    """This method must be implemented by subclasses to provide with the list of parameters used by the feature.
-
-    Returns:
-        Dict[int,bytearray]: Dictionary of parameter ids and values
-    """
     @abstractmethod
-    def set_values(self,values:Dict[int,bytearray]):
+    def set_values(self, values: Dict[int, bytearray]):
+        """Populate this status from a {param_id: param_bytes} mapping."""
         pass
 
-    """Parse the provided data into a dictionary of parameter names and values.
+    def parse(self, data: bytearray):
+        """Decode a raw response payload into parameter values.
 
-    Once the parameters have been parsed, they are passed to the feature using the method `set_values`
-    Args:
-        data (bytearray): Data to be parsed    
-    Raises:
-        ParseException: There is missing data or there is a data mismatch
-    """
-    def parse(self,data:bytearray):
-
-        if len(data)<4:
-            raise ParseException("Not enough bytes to parse")
+        Wire layout (after chunk reassembly):
+            byte 0        – total payload length
+            byte 1        – 0x00
+            bytes 2-3     – cmd_id
+            bytes 4+      – repeated: [param_id (1)] [param_size (1)] [value ...]
+        """
+        if len(data) < 4:
+            raise ParseException("Response too short to parse")
 
         if data[0] != len(data):
-            raise ParseException("Message size and data size mismatchs")
+            raise ParseException(
+                f"Declared size {data[0]} does not match actual size {len(data)}"
+            )
 
-
-        # We have already skipped chunk_id(1byte)
-        # We process the following data: size(1),cmd_id(3),param_id(1),param_size(1),param_value...
-     
-        values = {}
-        value_size = 0
+        values: Dict[int, bytearray] = {}
         i = 4
         while i < len(data):
-            if (i+1) >= len(data):
-                raise ParseException("Not enough data to parse while processing arguments")
-            
-            value_id = data[i]
-            if data[i+1] == 0xff:
-                value_size = 0
-            else: 
-                value_size = data[i+1]
+            if i + 1 >= len(data):
+                raise ParseException("Truncated parameter header at offset %d" % i)
 
-            if i+1+value_size >= len(data):
-                raise ParseException("Not enough data to parse while processing arguments")
-            
-            value_bytes = data[i+2:i+2+value_size]
-            if len(value_bytes) == 0:
-                value_bytes = bytes([0x00])
-            values[value_id] = value_bytes
+            param_id = data[i]
+            raw_size = data[i + 1]
+            param_size = 0 if raw_size == 0xFF else raw_size
 
-            i += 2 + value_size
-        
-        self.set_values(values)
+            if i + 1 + param_size >= len(data):
+                raise ParseException(
+                    "Truncated parameter value at offset %d (need %d more bytes)"
+                    % (i, param_size)
+                )
 
+            param_bytes = data[i + 2 : i + 2 + param_size]
+            values[param_id] = param_bytes if param_bytes else bytes([0x00])
 
-    """Serialize the status parameters into a bytearray.
+            i += 2 + param_size
 
-    Each parameter is written with the following structure: <param_id><param_contents_size><param_contents>
+        try:
+            self.set_values(values)
+        except KeyError as e:
+            raise ParseException(f"Missing required parameter {e} in response")
 
-    Returns:
-        bytearray: Data with all the parameter info
-    """
     def serialize(self) -> bytearray:
+        """Encode parameter values into the wire format expected by the device.
 
+        Each parameter is written as: [param_id (1)] [value_len (1)] [value ...]
+        An empty parameter list is represented as [0x00, 0x00].
+        """
         values = self.get_values()
-    
         out = bytearray()
+        for param_id, param_bytes in values.items():
+            out.append(param_id)
+            out.append(len(param_bytes))
+            out.extend(param_bytes)
+        return out if out else bytearray([0x00, 0x00])
 
-        for k,v in values.items():
-            out.append(k)
-            out.append(len(v))
-            out.extend(v)
 
-        # Special case when no parameters are used
-
-        if len(out) == 0:
-            out = bytearray([0x00,0x00])
-
-        return out
-            
+# ---------------------------------------------------------------------------
+# Feature
+# ---------------------------------------------------------------------------
 
 class Feature(ABC):
-    """
-    This interface defines the methods used by the features.
+    """Abstract base for all device features.
 
-    Attributes:
-        connection (Connection): Connection to be used to send messages
-        status (FeatureStatus): Status 
+    Subclasses declare their cmd_ids and status type; this class provides the
+    query/update logic that translates between Python objects and BLE payloads.
     """
+
     def __init__(self, connection: Connection):
-        """Inits the feature with the connection.
-
-        Args:
-            connection (Connection): Connection to be used to send messages
-        """
         self.connection = connection
-        self.status = None
+        self.status: FeatureStatus = None
         super().__init__()
-    
-    
+
     @abstractmethod
     def new_status(self) -> FeatureStatus:
-        """This method must be implemented by subclasses to return a new instance of the status used by this feature.
-
-        Returns:
-            FeatureStatus: New status instance
-        """
         pass
 
-    
     @property
     @abstractmethod
     def query_cmd_id(self) -> int:
-        """This method must be implemented by subclasses to return a the id used to query the device feature.
-
-        Returns:
-            int: Query status cmd id
-        """
         pass
-
 
     @property
     @abstractmethod
     def update_cmd_id(self) -> int:
-        """This method must be implemented by subclasses to return a the id used to update the device feature.
-
-        Returns:
-            int: Update status cmd id
-        """
         pass
 
     async def query(self) -> FeatureStatus:
-        """This method is used to query the device for this feature.
+        """Query the device and update self.status.
 
-        The method waits until the response is received, parses the result and updates the feature state accordingly.
-
-        Returns:
-            FeatureStatus: New status
         Raises:
-            ConnectionAbortedError: If the connection is not available
-            ConnectionException: If an error appeared during message delivery or reception
-            Exception: Any other exception raised is bubbled-up
+            ConnectionAbortedError  – permanent connection failure.
+            ConnectionException     – transient BLE error.
+            asyncio.TimeoutError    – no response within the timeout window.
+            NotImplementedException – this feature cannot be queried.
+            ParseException          – malformed response payload.
         """
-
         if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError(f"Could not send command: connection is not available")
+            raise ConnectionAbortedError(
+                "Cannot query %s: connection is aborted" % self.__class__.__name__
+            )
 
         cmd_id = self.query_cmd_id()
-        try:
-            async with self.connection._operation_lock:
-                new_status = self.new_status()
-                response = await self.connection.send(cmd_id, new_status.serialize())
-                await asyncio.wait_for(asyncio.shield(response), timeout=10.0)
-            result = response.result()
-            logger.debug(f"{self.__class__.__name__} QUERY response received ({len(result)} bytes)")
-            new_status.parse(result)
-            logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
-            self.status = new_status
-            return self.status
-        except CancelledError as e:
-            if cmd_id in self.connection.requests:
-                if len(self.connection.requests[cmd_id]) > 0:
-                    self.connection.requests[cmd_id].pop()
-            if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError("Could not send command: connection is not available")
-            elif self.connection.connection_status == ConnectionStatus.CONNECTING:
-                pass
-            else:
-                raise ConnectionException("Could not send command: message could not be rebuilt")
-        except ConnectionAbortedError as e:
-            raise e
-        except Exception as e:
-            raise e
-        
+        new_status = self.new_status()
 
-    async def update(self,update_status:FeatureStatus) -> FeatureStatus:
-        """This method is used to update the device for this feature.
+        result = await self.connection.send(cmd_id, new_status.serialize())
 
-        The method waits until the response is received, parses the result and updates the feature state accordingly.
+        logger.debug(
+            "%s QUERY response (%d bytes): %s",
+            self.__class__.__name__, len(result), result.hex(),
+        )
+        new_status.parse(result)
+        logger.debug(
+            "%s status: %s",
+            self.__class__.__name__,
+            json.dumps(vars(new_status), default=str),
+        )
+        self.status = new_status
+        return self.status
 
-        We can assume that if the response was parsed correctly, the command went OK. The response data, algthough parseable, does not
-        reflect the actual status of the device. e.g:
+    async def update(self, update_status: FeatureStatus) -> FeatureStatus:
+        """Push *update_status* to the device and confirm acknowledgement.
 
-        Operation Mode Command Set DRY:
-        < ACL Data TX: Handle 73 flags 0x00 dlen 15             #1757 [hci0] 984.889214
-        ATT: Write Command (0x52) len 10
-        Handle: 0x0205
-          Data: 0007004030200101 <---- DRY
+        Note: the device's acknowledgement payload does not reflect the new
+        state (it echoes back a default value), so self.status is set to the
+        requested *update_status* rather than parsed from the response.
 
-        Operation Mode Command Set DRY - Response :
-        > ACL Data RX: Handle 73 flags 0x02 dlen 15             #1759 [hci0] 984.951395
-        ATT: Handle Value Notification (0x1b) len 10
-        Handle: 0x0202
-          Data: 0007004030200100 <---- FAN_ONLY
-
-        Please note the last byte as it 
-
-        Args:
-            update_status (FeatureStatus): New status to be set
-        Returns:
-            FeatureStatus: New status
-        Raises:
-            ConnectionAbortedError: If the connection is not available
-            ConnectionException: If an error appeared during message delivery or reception
-            Exception: Any other exception raised is bubbled-up
+        Raises: same as query().
         """
-
         if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError(f"Could not send command: connection is not available")
+            raise ConnectionAbortedError(
+                "Cannot update %s: connection is aborted" % self.__class__.__name__
+            )
 
         cmd_id = self.update_cmd_id()
+
+        result = await self.connection.send(cmd_id, update_status.serialize())
+
+        logger.debug(
+            "%s UPDATE ack (%d bytes): %s",
+            self.__class__.__name__, len(result), result.hex(),
+        )
+        # Parse for validation / logging only; use the requested status as the
+        # new state because the ack payload carries a device default, not the
+        # value we just set.
         try:
-            async with self.connection._operation_lock:
-                response = await self.connection.send(cmd_id, update_status.serialize())
-                await asyncio.wait_for(asyncio.shield(response), timeout=10.0)
-            result = response.result()
-            logger.debug(f"{self.__class__.__name__} UPDATE response received ({len(result)} bytes)")
-            response_status = self.new_status()
-            response_status.parse(result)
-            logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(response_status), default=str)}")
-            self.status = update_status
-            return self.status
-        except CancelledError as e:
-            if cmd_id in self.connection.requests:
-                if len(self.connection.requests[cmd_id]) > 0:
-                    self.connection.requests[cmd_id].pop()
-            if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError("Could not send command: connection is not available")
-            elif self.connection.connection_status == ConnectionStatus.CONNECTING:
-                pass
-            else:
-                raise ConnectionException("Could not send command: message could not be rebuilt")
-        except ConnectionAbortedError as e:
-            raise e
-        except Exception as e:
-            raise e
-       
+            ack_status = self.new_status()
+            ack_status.parse(result)
+            logger.debug(
+                "%s ack parsed: %s",
+                self.__class__.__name__,
+                json.dumps(vars(ack_status), default=str),
+            )
+        except ParseException as e:
+            logger.debug("%s ack parse warning: %s", self.__class__.__name__, e)
+
+        self.status = update_status
+        return self.status
