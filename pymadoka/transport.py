@@ -1,146 +1,91 @@
-"""This module encapsulates the data transfer protocol requirements defined by the device
+"""BLE framing layer: chunk splitting and reassembly for the Madoka protocol.
+
+Each chunk is at most 20 bytes: 1-byte sequential index followed by up to 19
+bytes of payload.  The first byte of the assembled payload is the total payload
+length, which lets us know how many chunks to expect.
 """
 
 import logging
 import math
 import typing
-from abc import ABC,abstractmethod
+from abc import ABC, abstractmethod
 
-
-"""
-Data transfer size 
-"""
 MAX_CHUNK_SIZE = 20
+_PAYLOAD_PER_CHUNK = MAX_CHUNK_SIZE - 1  # 19 bytes of payload per chunk
 
 logger = logging.getLogger(__name__)
 
-class TransportDelegate(ABC):
-    """
-    This interface defines the methods used by the Transport to notify the result of the rebuild process.
-    """
 
-    """Callback method used when a message has been sucessfully rebuilt.
-         
-    Args:
-        data (bytearray): Rebuilt message data
-    """
+class TransportDelegate(ABC):
     @abstractmethod
-    def response_rebuilt(self,data:bytearray):
+    def response_rebuilt(self, data: bytearray):
         pass
 
-    """Callback method used when the stored chunks of a message have been discarded.  
-    """
     @abstractmethod
-    def response_failed(self):
+    def response_failed(self, data: bytearray):
         pass
 
 
 class Transport:
+    """Chunk splitter / reassembler used as a utility by Connection.
 
-    """This class encapsulates the data packetizing required by the device (max 20 bytes per package as described in the protocol).
-
-    Therefore, bigger data has to be split into smaller chunks and sent done in sequence.
-    The implementation assumes we will receive all the chunks in order as they are being sent in serial order
-    However, this will not work if more than one client is attached to the same device
-         
-    Attributes:
-        delegate (`TransportDelegate`): The delegate to be notified when the a message has been rebuilt or discarded.
-        chunks (List[bytearray]): Current rebuild chunks data
-        last_id (int): ID of the last chunk stored in the list. This is used to check if newly received chunks follow the sequence
+    split_in_chunks() is the main production path.
+    rebuild_chunk() / response_rebuilt / response_failed are kept for API
+    compatibility but are no longer called in the core send/receive path.
     """
-    def __init__(self, delegate:TransportDelegate):
-        """Inits the transport with the delegate.
-        
-        Args:
-            delegate (`TransportDelegate`): The delegate to be notified when the a message has been rebuilt or discarded.
-        """
-        self.chunks:list(bytearray) = []
+
+    def __init__(self, delegate: TransportDelegate):
+        self.chunks: list = []
         self.delegate = delegate
-        self.last_id = None
-        
+        self.last_id: typing.Optional[int] = None
 
     def clear(self):
-        """
-        Clear the list of chunks
-        """
         self.chunks.clear()
-
+        self.last_id = None
 
     def is_message_complete(self) -> bool:
-        """Check if the stored chunks can be used to rebuild a message.
-
-        Returns:
-            bool: The return value. True for success, False otherwise.
-        """
-        if len(self.chunks) <= 0:
+        if not self.chunks:
             return False
-        
-        expected_size = math.ceil(self.chunks[0][1] / MAX_CHUNK_SIZE)
-       
-        if len(self.chunks) != expected_size:
-            return False
+        total_payload_size = self.chunks[0][1]
+        expected_chunks = math.ceil(total_payload_size / _PAYLOAD_PER_CHUNK)
+        return len(self.chunks) == expected_chunks
 
-        return True
-
-    def rebuild_chunk(self, chunk:bytearray):
-        """Process the chunk.
-         
-            - The chunk has an id that follows the sequence of the stored chunks .If the message is complete, the delegate is notified
-            - The chunk has an id that belongs to a different message .Current chunks are discarded and the delegate is notified
-
-        Args:
-            chunk (bytearray): The chunk data to be processed
-        """
+    def rebuild_chunk(self, chunk: bytearray):
         if len(chunk) < 2:
-            logger.info(F"Chunk received but discarded due to not enough data ({len(chunk)} bytes)")
+            logger.debug(f"Chunk too short ({len(chunk)} bytes), discarding")
             return
-        
+
         chunk_id = chunk[0]
-        
+
         if self.last_id is not None and chunk_id <= self.last_id:
-            logger.debug("Chunks of a new message received while rebuilding another message. Discarding previous chunks...") 
+            logger.debug("New message started while reassembling, discarding previous chunks")
             out = self.chunks_data()
             self.delegate.response_failed(out)
 
-
-        self.last_id = chunk[0]
-        
+        self.last_id = chunk_id
         self.chunks.append(chunk)
-        
-        if self.is_message_complete(): 
 
-            logger.debug("Message complete. Processing...")
+        if self.is_message_complete():
+            logger.debug("Message complete")
             out = self.chunks_data()
             self.last_id = None
             self.delegate.response_rebuilt(out)
 
-
-    def chunks_data(self):
+    def chunks_data(self) -> bytearray:
         out = bytearray()
-        
         for c in self.chunks:
             out.extend(c[1:])
         self.chunks.clear()
-
         return out
 
-    def split_in_chunks(self, data:bytearray) -> typing.List[bytearray]:
-        """Split the data in MAX_CHUNK_SIZE bytes chunks. If more than one chunk is produced, numerate each chunk in the sequence.
-        
-        Args:
-            data (bytearray): The data to be split
-        Returns:
-            List[bytearray]: List of chunks
-        """
-        chunks:list(bytearray) = []
-
+    def split_in_chunks(self, data: bytearray) -> typing.List[bytearray]:
+        """Split payload into MAX_CHUNK_SIZE-byte chunks with a sequential index prefix."""
+        chunks: typing.List[bytearray] = []
         idx = 0
         while True:
-            chunk = data[idx*19:min((idx+1)*19,len(data))]
-            chunks.append(bytearray(idx.to_bytes(1,"big")) + chunk)
-            idx+=1
-            if idx*19 >= len(data):
+            slice_ = data[idx * _PAYLOAD_PER_CHUNK : (idx + 1) * _PAYLOAD_PER_CHUNK]
+            chunks.append(bytearray([idx]) + slice_)
+            idx += 1
+            if idx * _PAYLOAD_PER_CHUNK >= len(data):
                 break
-
         return chunks
-          
