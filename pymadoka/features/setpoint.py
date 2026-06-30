@@ -85,6 +85,9 @@ class SetPointStatus(FeatureStatus):
         
     def get_values(self) -> Dict[str,bytearray]:
         """See base class."""
+        import logging
+        _LOGGER = logging.getLogger(__name__)
+        _LOGGER.warning("DEBUG_MADOKA: Invio setpoint - Cooling: %s, Heating: %s", self.cooling_set_point, self.heating_set_point)
         values = {}
         values[self.COOLING_IDX[0]] = (self.cooling_set_point*128).to_bytes(self.COOLING_IDX[1],"big")
         values[self.HEATING_IDX[0]] = (self.heating_set_point*128).to_bytes(self.HEATING_IDX[1],"big")
