@@ -163,6 +163,75 @@ class Feature(ABC):
         """
         pass
 
+    async def _roundtrip(self, cmd_id: int, payload: bytearray) -> bytearray:
+        """Send a command and wait for its response, with a short per-attempt
+        timeout and bounded retries.
+
+        A short timeout combined with retries keeps the effective latency low
+        (a lost response is retried after `command_timeout` instead of blocking
+        for a long single wait) while surviving dropped BLE notifications.
+
+        The commands issued by this library are idempotent (they carry absolute
+        values, not increments), so retrying a write is safe.
+
+        Returns:
+            bytearray: Raw response data, or None if the link is (re)connecting.
+        Raises:
+            ConnectionAbortedError: If the connection is not available
+            ConnectionException: If the command could not be delivered/rebuilt
+            asyncio.TimeoutError: If no response arrived after all retries
+        """
+        conn = self.connection
+        tries = max(1, conn.command_max_tries)
+        last_error = None
+        # Number of attempts that timed out. Each one leaves a response in flight
+        # on the device side; we arm the connection's stale guard for that many
+        # so those delayed stragglers cannot desync the next command.
+        timeouts = 0
+
+        try:
+            for attempt in range(1, tries + 1):
+                if conn.connection_status == ConnectionStatus.ABORTED:
+                    raise ConnectionAbortedError("Could not send command: connection is not available")
+
+                response = None
+                try:
+                    async with conn._operation_lock:
+                        response = await conn.send(cmd_id, payload)
+                        await asyncio.wait_for(asyncio.shield(response), timeout=conn.command_timeout)
+                    return response.result()
+                except asyncio.TimeoutError:
+                    if response is not None:
+                        conn.discard_request(cmd_id, response)
+                    timeouts += 1
+                    last_error = asyncio.TimeoutError()
+                    logger.warning(
+                        f"{self.__class__.__name__} cmd {cmd_id} timed out "
+                        f"(attempt {attempt}/{tries})"
+                    )
+                except CancelledError as e:
+                    if response is not None:
+                        conn.discard_request(cmd_id, response)
+                    if conn.connection_status == ConnectionStatus.ABORTED:
+                        raise ConnectionAbortedError("Could not send command: connection is not available")
+                    if conn.connection_status == ConnectionStatus.CONNECTING:
+                        # Link is coming back up; do not hammer it with retries.
+                        return None
+                    last_error = ConnectionException("Could not send command: message could not be rebuilt")
+                    logger.debug(
+                        f"{self.__class__.__name__} cmd {cmd_id} not rebuilt "
+                        f"(attempt {attempt}/{tries})"
+                    )
+
+                if attempt < tries:
+                    await asyncio.sleep(conn.command_retry_delay * attempt)
+
+            if last_error is not None:
+                raise last_error
+            raise ConnectionException("Could not send command")
+        finally:
+            conn.arm_stale_guard(cmd_id, timeouts)
+
     async def query(self) -> FeatureStatus:
         """This method is used to query the device for this feature.
 
@@ -180,32 +249,16 @@ class Feature(ABC):
                 raise ConnectionAbortedError(f"Could not send command: connection is not available")
 
         cmd_id = self.query_cmd_id()
-        try:
-            async with self.connection._operation_lock:
-                new_status = self.new_status()
-                response = await self.connection.send(cmd_id, new_status.serialize())
-                await asyncio.wait_for(asyncio.shield(response), timeout=10.0)
-            result = response.result()
-            logger.debug(f"{self.__class__.__name__} QUERY response received ({len(result)} bytes)")
-            new_status.parse(result)
-            logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
-            self.status = new_status
+        new_status = self.new_status()
+        result = await self._roundtrip(cmd_id, new_status.serialize())
+        if result is None:
             return self.status
-        except CancelledError as e:
-            if cmd_id in self.connection.requests:
-                if len(self.connection.requests[cmd_id]) > 0:
-                    self.connection.requests[cmd_id].pop()
-            if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError("Could not send command: connection is not available")
-            elif self.connection.connection_status == ConnectionStatus.CONNECTING:
-                pass
-            else:
-                raise ConnectionException("Could not send command: message could not be rebuilt")
-        except ConnectionAbortedError as e:
-            raise e
-        except Exception as e:
-            raise e
-        
+        logger.debug(f"{self.__class__.__name__} QUERY response received ({len(result)} bytes)")
+        new_status.parse(result)
+        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
+        self.status = new_status
+        return self.status
+
 
     async def update(self,update_status:FeatureStatus) -> FeatureStatus:
         """This method is used to update the device for this feature.
@@ -243,29 +296,13 @@ class Feature(ABC):
                 raise ConnectionAbortedError(f"Could not send command: connection is not available")
 
         cmd_id = self.update_cmd_id()
-        try:
-            async with self.connection._operation_lock:
-                response = await self.connection.send(cmd_id, update_status.serialize())
-                await asyncio.wait_for(asyncio.shield(response), timeout=10.0)
-            result = response.result()
-            logger.debug(f"{self.__class__.__name__} UPDATE response received ({len(result)} bytes)")
-            response_status = self.new_status()
-            response_status.parse(result)
-            logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(response_status), default=str)}")
-            self.status = update_status
+        result = await self._roundtrip(cmd_id, update_status.serialize())
+        if result is None:
             return self.status
-        except CancelledError as e:
-            if cmd_id in self.connection.requests:
-                if len(self.connection.requests[cmd_id]) > 0:
-                    self.connection.requests[cmd_id].pop()
-            if self.connection.connection_status == ConnectionStatus.ABORTED:
-                raise ConnectionAbortedError("Could not send command: connection is not available")
-            elif self.connection.connection_status == ConnectionStatus.CONNECTING:
-                pass
-            else:
-                raise ConnectionException("Could not send command: message could not be rebuilt")
-        except ConnectionAbortedError as e:
-            raise e
-        except Exception as e:
-            raise e
+        logger.debug(f"{self.__class__.__name__} UPDATE response received ({len(result)} bytes)")
+        response_status = self.new_status()
+        response_status.parse(result)
+        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(response_status), default=str)}")
+        self.status = update_status
+        return self.status
        
