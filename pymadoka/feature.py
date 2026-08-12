@@ -320,6 +320,7 @@ class Feature(ABC):
         response_status = self.new_status()
         response_status.parse(result)
         logger.debug(f"{self.log_id} UPDATE applied, values sent:\n{json.dumps(vars(update_status), default=str)}")
+        logger.debug(f"{self.log_id} UPDATE response parsed:\n{json.dumps(vars(response_status), default=str)}")
         self.status = update_status
         return self.status
        

@@ -182,6 +182,10 @@ class SetPoint(Feature):
         "heating_upperlimit_symbol",
     )
 
+    # Value of the MODE parameter (0x31) reported by the devices that keep two
+    # distinct set points, and sent on a write to ask for that interpretation.
+    DUAL_SET_POINT_MODE = 2
+
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Update the set points, preserving the device's range configuration.
 
@@ -219,7 +223,37 @@ class SetPoint(Feature):
             )
             return self.status
 
+        # Two distinct set points were refused. On a write the MODE parameter
+        # seems to select how the command is interpreted rather than to describe
+        # the device: a device reporting mode 0 refuses distinct set points when
+        # the command echoes that 0 back, while the devices that accept them
+        # report 2. Retry asking for the dual interpretation before giving up on
+        # keeping the two values apart.
+        if update_status.mode != self.DUAL_SET_POINT_MODE:
+            applied = await self._retry_as_dual(update_status, applied)
+            if applied is None or self._matches(applied, update_status):
+                return self.status
+
         return await self._retry_shared(update_status, previous, applied)
+
+    async def _retry_as_dual(
+        self, update_status: "SetPointStatus", applied: "SetPointStatus"
+    ):
+        """Rewrite the same set points asking for the dual set-point mode."""
+        dual = self.new_status()
+        for param in self.RANGE_PARAMS:
+            setattr(dual, param, getattr(applied, param))
+        dual.mode = self.DUAL_SET_POINT_MODE
+        dual.cooling_set_point = update_status.cooling_set_point
+        dual.heating_set_point = update_status.heating_set_point
+
+        logger.info(
+            f"{self.log_id} device refused cooling {update_status.cooling_set_point} / "
+            f"heating {update_status.heating_set_point} with mode {update_status.mode}; "
+            f"retrying the same values with mode {self.DUAL_SET_POINT_MODE}"
+        )
+        await super().update(dual)
+        return await self._read_back(dual)
 
     async def _read_back(self, update_status: "SetPointStatus"):
         """Query the device to find out whether the write was really applied.
