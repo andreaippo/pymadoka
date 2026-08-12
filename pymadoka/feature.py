@@ -209,9 +209,17 @@ class Feature(ABC):
                         f"{self.__class__.__name__} cmd {cmd_id} timed out "
                         f"(attempt {attempt}/{tries})"
                     )
-                except CancelledError as e:
-                    if response is not None:
-                        conn.discard_request(cmd_id, response)
+                except CancelledError:
+                    # Two very different things raise here:
+                    #  - the link dropped and _fail_all_requests() cancelled our
+                    #    response future (response.cancelled() is True) -> handle it
+                    #    as a connection error below,
+                    #  - our own task was cancelled from outside (wait_for, HA
+                    #    unload). The shielded future is still pending, so it must
+                    #    propagate instead of being retried/swallowed.
+                    if response is None or not response.cancelled():
+                        raise
+                    conn.discard_request(cmd_id, response)
                     if conn.connection_status == ConnectionStatus.ABORTED:
                         raise ConnectionAbortedError("Could not send command: connection is not available")
                     if conn.connection_status == ConnectionStatus.CONNECTING:

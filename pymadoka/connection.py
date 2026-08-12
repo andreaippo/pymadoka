@@ -83,6 +83,7 @@ class Connection(TransportDelegate):
         self.current_future = None
         self.requests = {}
         self._is_starting = False
+        self._reconnect_task = None
         self._operation_lock = asyncio.Lock()
         self._retry_delay = RECONNECT_BASE_DELAY
 
@@ -124,10 +125,24 @@ class Connection(TransportDelegate):
         # instead of letting callers block until their per-command timeout.
         self._fail_all_requests()
         if self.reconnect and not self._is_starting:
-            asyncio.create_task(self.start())
+            # Keep a reference: a bare create_task() may be garbage collected
+            # while still pending.
+            self._reconnect_task = asyncio.create_task(self.start())
 
     async def cleanup(self):
         self.reconnect = False
+        # Stop any connection loop still retrying in the background, otherwise it
+        # keeps racing (and can hold _is_starting) after the caller gave up.
+        task = self._reconnect_task
+        self._reconnect_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except CancelledError:
+                pass
+            except Exception:
+                pass
         if self.client:
             try:
                 await self.client.stop_notify(NOTIFY_CHAR_UUID)
@@ -150,6 +165,9 @@ class Connection(TransportDelegate):
         try:
             while self.connection_status not in (ConnectionStatus.CONNECTED, ConnectionStatus.ABORTED):
                 try:
+                    if not self.reconnect and self.connection_status == ConnectionStatus.DISCONNECTED:
+                        # cleanup() ran while we were retrying: stop the loop.
+                        break
                     if self.hass is not None:
                         await self._connect_via_ha()
                     else:
@@ -160,8 +178,13 @@ class Connection(TransportDelegate):
                         await asyncio.sleep(self._next_backoff())
                 except ConnectionAbortedError:
                     self.connection_status = ConnectionStatus.ABORTED
-                except CancelledError as e:
-                    logger.error(f"Connection task cancelled for {self.address}: {e}")
+                except CancelledError:
+                    # Cancellation comes from the caller (e.g. asyncio.wait_for on
+                    # start(), or HA unloading the entry). It must propagate: if it
+                    # is swallowed here the loop keeps running and the awaiting
+                    # wait_for never completes.
+                    logger.debug(f"Connection task cancelled for {self.address}")
+                    raise
                 except Exception as e:
                     logger.error(f"Unexpected error in connection loop for {self.address}: {e}")
                     self.connection_status = ConnectionStatus.ABORTED
@@ -304,9 +327,10 @@ class Connection(TransportDelegate):
                     logger.debug(f"CMD {cmd_id}. Chunk #{chunknum+1}/{len(chunks)} sent with size {len(chunk)} bytes")
                     sent += 1
                     break
-                except CancelledError as e:
-                    logger.debug(f"Send command failed. Retrying ({i+1}/{SEND_MAX_TRIES}) for chunk #{chunknum} : {str(e)}", exc_info=e)
-                    await asyncio.sleep(self.write_retry_delay * (i + 1))
+                except CancelledError:
+                    # Never retry through a cancellation: it belongs to the caller.
+                    self.discard_request(cmd_id, cmd_response)
+                    raise
                 except Exception as e:
                     logger.debug(f"Send command failed. Retrying ({i+1}/{SEND_MAX_TRIES}) for chunk #{chunknum} : {str(e)}")
                     await asyncio.sleep(self.write_retry_delay * (i + 1))
