@@ -182,6 +182,10 @@ class SetPoint(Feature):
         "heating_upperlimit_symbol",
     )
 
+    # Value of the MODE parameter (0x31) when the device works with a single set
+    # point shared by cooling and heating instead of one per mode.
+    SINGLE_SET_POINT_MODE = 1
+
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Update the set points, preserving the device's range configuration.
 
@@ -191,9 +195,47 @@ class SetPoint(Feature):
         if self.status is not None:
             for param in self.RANGE_PARAMS:
                 setattr(update_status, param, getattr(self.status, param))
+            if update_status.mode == self.SINGLE_SET_POINT_MODE:
+                self._unify_set_points(update_status)
             if update_status.range_enabled:
                 self._warn_out_of_range(update_status)
         return await super().update(update_status)
+
+    def _unify_set_points(self, status: "SetPointStatus"):
+        """Write the same value to both set points when the device is in single
+        set-point mode.
+
+        In that mode the device holds one temperature for cooling and heating and
+        refuses the whole command if the two differ. Callers only know the mode
+        they are acting on (e.g. cooling while in COOL), so they leave the other
+        set point at its previous value: the changed one is the requested
+        temperature and is applied to both.
+        """
+        if status.cooling_set_point == status.heating_set_point:
+            return
+
+        cooling_changed = status.cooling_set_point != self.status.cooling_set_point
+        heating_changed = status.heating_set_point != self.status.heating_set_point
+
+        if cooling_changed and not heating_changed:
+            requested = status.cooling_set_point
+        elif heating_changed and not cooling_changed:
+            requested = status.heating_set_point
+        else:
+            # Both (or neither) changed: no way to tell which one was requested,
+            # so keep the cooling value and make it explicit in the log.
+            requested = status.cooling_set_point
+            logger.warning(
+                f"{self.log_id} device is in single set-point mode but cooling "
+                f"({status.cooling_set_point}) and heating ({status.heating_set_point}) "
+                f"were both requested; using {requested} for both"
+            )
+
+        logger.debug(
+            f"{self.log_id} single set-point mode: writing {requested} to both set points"
+        )
+        status.cooling_set_point = requested
+        status.heating_set_point = requested
 
     def _warn_out_of_range(self, status: "SetPointStatus"):
         """Log the set points the device would refuse, so a rejected command is
