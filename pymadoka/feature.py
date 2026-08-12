@@ -130,6 +130,12 @@ class Feature(ABC):
         self.connection = connection
         self.status = None
         super().__init__()
+
+    @property
+    def log_id(self) -> str:
+        """Device address and feature name, so log lines can be told apart when
+        several devices are controlled from the same process."""
+        return f"[{self.connection.address}] {self.__class__.__name__}"
     
     
     @abstractmethod
@@ -206,7 +212,7 @@ class Feature(ABC):
                     timeouts += 1
                     last_error = asyncio.TimeoutError()
                     logger.warning(
-                        f"{self.__class__.__name__} cmd {cmd_id} timed out "
+                        f"{self.log_id} cmd {cmd_id} timed out "
                         f"(attempt {attempt}/{tries})"
                     )
                 except CancelledError:
@@ -227,7 +233,7 @@ class Feature(ABC):
                         return None
                     last_error = ConnectionException("Could not send command: message could not be rebuilt")
                     logger.debug(
-                        f"{self.__class__.__name__} cmd {cmd_id} not rebuilt "
+                        f"{self.log_id} cmd {cmd_id} not rebuilt "
                         f"(attempt {attempt}/{tries})"
                     )
 
@@ -261,9 +267,9 @@ class Feature(ABC):
         result = await self._roundtrip(cmd_id, new_status.serialize())
         if result is None:
             return self.status
-        logger.debug(f"{self.__class__.__name__} QUERY response received ({len(result)} bytes)")
+        logger.debug(f"{self.log_id} QUERY response received ({len(result)} bytes)")
         new_status.parse(result)
-        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
+        logger.debug(f"{self.log_id} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
         self.status = new_status
         return self.status
 
@@ -307,10 +313,13 @@ class Feature(ABC):
         result = await self._roundtrip(cmd_id, update_status.serialize())
         if result is None:
             return self.status
-        logger.debug(f"{self.__class__.__name__} UPDATE response received ({len(result)} bytes)")
+        logger.debug(f"{self.log_id} UPDATE response received ({len(result)} bytes)")
+        # The response is parsed only to validate that the command was accepted:
+        # its contents do not reflect the device state (see the docstring above),
+        # so the status written is the one logged.
         response_status = self.new_status()
         response_status.parse(result)
-        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(response_status), default=str)}")
+        logger.debug(f"{self.log_id} UPDATE applied, values sent:\n{json.dumps(vars(update_status), default=str)}")
         self.status = update_status
         return self.status
        

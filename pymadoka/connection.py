@@ -310,7 +310,7 @@ class Connection(TransportDelegate):
         payload = bytearray([0x00]) + self.cmd_id_to_bytes(cmd_id) + data
         payload[0] = len(payload)
 
-        logger.debug(f"Sending cmd payload: {bytes(payload).hex()}")
+        logger.debug(f"[{self.address}] Sending cmd {cmd_id} payload: {bytes(payload).hex()}")
 
         chunks = self.transport.split_in_chunks(payload)
         sent = 0
@@ -324,7 +324,7 @@ class Connection(TransportDelegate):
                         return cmd_response
 
                     await self.client.write_gatt_char(WRITE_CHAR_UUID, chunk)
-                    logger.debug(f"CMD {cmd_id}. Chunk #{chunknum+1}/{len(chunks)} sent with size {len(chunk)} bytes")
+                    logger.debug(f"[{self.address}] CMD {cmd_id}. Chunk #{chunknum+1}/{len(chunks)} sent with size {len(chunk)} bytes")
                     sent += 1
                     break
                 except CancelledError:

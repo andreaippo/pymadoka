@@ -205,6 +205,6 @@ class SetPoint(Feature):
         ):
             if upper and not (lower <= value <= upper):
                 logger.warning(
-                    f"{label} set point {value} is outside the range configured on the "
+                    f"{self.log_id} {label} set point {value} is outside the range configured on the "
                     f"device ({lower}-{upper}); the device may refuse the command"
                 )
