@@ -63,7 +63,18 @@ class SetPointStatus(FeatureStatus):
         self.heating_upperlimit = 0
         self.cooling_upperlimit_symbol = 0
         self.heating_upperlimit_symbol = 0
-        
+        # When set, only these parameter ids are serialized on a write. A device
+        # that validates the two set points against each other refuses a command
+        # carrying both with different values, but accepts a command carrying a
+        # single one.
+        self.only_params = None
+
+    def __repr__(self):
+        return (
+            f"SetPointStatus(cooling={self.cooling_set_point}, "
+            f"heating={self.heating_set_point}, mode={self.mode})"
+        )
+
     def set_values(self, values:Dict[str,bytearray]):
         """See base class.
 
@@ -130,6 +141,8 @@ class SetPointStatus(FeatureStatus):
             (self.HEATING_UPPERLIMIT_SYMBOL_IDX, self.heating_upperlimit_symbol),
         ):
             param_id, size = idx
+            if self.only_params is not None and param_id not in self.only_params:
+                continue
             # Temperatures use the device's 1/128 degree scale (2 bytes), flags and
             # symbols are plain single-byte values.
             raw = round(value * 128) if size == 2 else int(value)
@@ -223,23 +236,52 @@ class SetPoint(Feature):
             )
             return self.status
 
-        # Two distinct set points were refused. On a write the MODE parameter
-        # seems to select how the command is interpreted rather than to describe
-        # the device: a device reporting mode 0 refuses distinct set points when
-        # the command echoes that 0 back, while the devices that accept them
-        # report 2. Retry asking for the dual interpretation before giving up on
-        # keeping the two values apart.
-        if update_status.mode != self.DUAL_SET_POINT_MODE:
-            applied = await self._retry_as_dual(update_status, applied)
+        # Two distinct set points were refused: the device validates the pair and
+        # drops the whole command, so not even the changed value went through.
+        # Before giving up on keeping the two apart, try the two ways a device
+        # that does hold distinct set points can still accept them: sending only
+        # the changed parameter, and asking for the dual interpretation via MODE.
+        for retry in (self._retry_single_param, self._retry_as_dual):
+            applied = await retry(update_status, previous, applied)
             if applied is None or self._matches(applied, update_status):
                 return self.status
 
         return await self._retry_shared(update_status, previous, applied)
 
-    async def _retry_as_dual(
-        self, update_status: "SetPointStatus", applied: "SetPointStatus"
-    ):
+    def _changed_set_point(self, update_status, previous):
+        """Parameter id and value of the set point the caller actually changed."""
+        if update_status.heating_set_point != previous.heating_set_point:
+            return self.status.HEATING_IDX[0], update_status.heating_set_point
+        return self.status.COOLING_IDX[0], update_status.cooling_set_point
+
+    async def _retry_single_param(self, update_status, previous, applied):
+        """Rewrite only the set point that changed, leaving the pair alone.
+
+        A device that keeps two distinct set points refuses a command carrying
+        both when they differ, but a command carrying one parameter cannot be
+        inconsistent, so it has no reason to be dropped.
+        """
+        param_id, value = self._changed_set_point(update_status, previous)
+
+        single = self.new_status()
+        for param in self.RANGE_PARAMS:
+            setattr(single, param, getattr(applied, param))
+        single.cooling_set_point = update_status.cooling_set_point
+        single.heating_set_point = update_status.heating_set_point
+        single.only_params = {param_id}
+
+        logger.info(
+            f"{self.log_id} retrying with parameter {hex(param_id)} only "
+            f"(value {value})"
+        )
+        await super().update(single)
+        return await self._read_back(update_status)
+
+    async def _retry_as_dual(self, update_status, previous, applied):
         """Rewrite the same set points asking for the dual set-point mode."""
+        if applied is not None and applied.mode == self.DUAL_SET_POINT_MODE:
+            return applied
+
         dual = self.new_status()
         for param in self.RANGE_PARAMS:
             setattr(dual, param, getattr(applied, param))
@@ -248,9 +290,9 @@ class SetPoint(Feature):
         dual.heating_set_point = update_status.heating_set_point
 
         logger.info(
-            f"{self.log_id} device refused cooling {update_status.cooling_set_point} / "
-            f"heating {update_status.heating_set_point} with mode {update_status.mode}; "
-            f"retrying the same values with mode {self.DUAL_SET_POINT_MODE}"
+            f"{self.log_id} retrying cooling {update_status.cooling_set_point} / "
+            f"heating {update_status.heating_set_point} with mode "
+            f"{self.DUAL_SET_POINT_MODE}"
         )
         await super().update(dual)
         return await self._read_back(dual)
