@@ -182,9 +182,11 @@ class SetPoint(Feature):
         "heating_upperlimit_symbol",
     )
 
-    # Value of the MODE parameter (0x31) when the device works with a single set
-    # point shared by cooling and heating instead of one per mode.
-    SINGLE_SET_POINT_MODE = 1
+    # Value of the MODE parameter (0x31) when the device keeps one set point per
+    # mode (cooling and heating can differ). Observed values: 2 on devices with
+    # the dual set point enabled, 0 and 1 on devices sharing a single set point -
+    # those refuse any command whose two set points differ.
+    DUAL_SET_POINT_MODE = 2
 
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Update the set points, preserving the device's range configuration.
@@ -195,18 +197,18 @@ class SetPoint(Feature):
         if self.status is not None:
             for param in self.RANGE_PARAMS:
                 setattr(update_status, param, getattr(self.status, param))
-            if update_status.mode == self.SINGLE_SET_POINT_MODE:
+            if update_status.mode != self.DUAL_SET_POINT_MODE:
                 self._unify_set_points(update_status)
             if update_status.range_enabled:
                 self._warn_out_of_range(update_status)
         return await super().update(update_status)
 
     def _unify_set_points(self, status: "SetPointStatus"):
-        """Write the same value to both set points when the device is in single
+        """Write the same value to both set points when the device is not in dual
         set-point mode.
 
-        In that mode the device holds one temperature for cooling and heating and
-        refuses the whole command if the two differ. Callers only know the mode
+        Outside that mode the device holds one temperature for cooling and heating
+        and refuses the whole command if the two differ. Callers only know the mode
         they are acting on (e.g. cooling while in COOL), so they leave the other
         set point at its previous value: the changed one is the requested
         temperature and is applied to both.
@@ -226,13 +228,13 @@ class SetPoint(Feature):
             # so keep the cooling value and make it explicit in the log.
             requested = status.cooling_set_point
             logger.warning(
-                f"{self.log_id} device is in single set-point mode but cooling "
+                f"{self.log_id} device is not in dual set-point mode but cooling "
                 f"({status.cooling_set_point}) and heating ({status.heating_set_point}) "
                 f"were both requested; using {requested} for both"
             )
 
         logger.debug(
-            f"{self.log_id} single set-point mode: writing {requested} to both set points"
+            f"{self.log_id} shared set-point mode: writing {requested} to both set points"
         )
         status.cooling_set_point = requested
         status.heating_set_point = requested
