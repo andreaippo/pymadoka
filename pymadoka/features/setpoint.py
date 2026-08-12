@@ -182,62 +182,114 @@ class SetPoint(Feature):
         "heating_upperlimit_symbol",
     )
 
-    # Value of the MODE parameter (0x31) when the device keeps one set point per
-    # mode (cooling and heating can differ). Observed values: 2 on devices with
-    # the dual set point enabled, 0 and 1 on devices sharing a single set point -
-    # those refuse any command whose two set points differ.
-    DUAL_SET_POINT_MODE = 2
-
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Update the set points, preserving the device's range configuration.
 
         Callers build a `SetPointStatus` with the set points only, so the range
         parameters are taken from the last status read from the device.
+
+        Some devices share a single temperature between cooling and heating and
+        refuse - without any error - a command whose two set points differ. Which
+        devices do so cannot be told from the parameters they report: the MODE
+        parameter (0x31) has been observed as 0 both on a device that keeps two
+        distinct set points and on one that refuses them. So the requested values
+        are written as they are, the result is read back, and only a device that
+        did not apply them gets a second write with the requested temperature on
+        both set points.
         """
-        if self.status is not None:
+        previous = self.status
+        if previous is not None:
             for param in self.RANGE_PARAMS:
-                setattr(update_status, param, getattr(self.status, param))
-            if update_status.mode != self.DUAL_SET_POINT_MODE:
-                self._unify_set_points(update_status)
+                setattr(update_status, param, getattr(previous, param))
             if update_status.range_enabled:
                 self._warn_out_of_range(update_status)
-        return await super().update(update_status)
 
-    def _unify_set_points(self, status: "SetPointStatus"):
-        """Write the same value to both set points when the device is not in dual
-        set-point mode.
+        await super().update(update_status)
+        if previous is None:
+            return self.status
 
-        Outside that mode the device holds one temperature for cooling and heating
-        and refuses the whole command if the two differ. Callers only know the mode
-        they are acting on (e.g. cooling while in COOL), so they leave the other
-        set point at its previous value: the changed one is the requested
-        temperature and is applied to both.
-        """
-        if status.cooling_set_point == status.heating_set_point:
-            return
-
-        cooling_changed = status.cooling_set_point != self.status.cooling_set_point
-        heating_changed = status.heating_set_point != self.status.heating_set_point
-
-        if cooling_changed and not heating_changed:
-            requested = status.cooling_set_point
-        elif heating_changed and not cooling_changed:
-            requested = status.heating_set_point
-        else:
-            # Both (or neither) changed: no way to tell which one was requested,
-            # so keep the cooling value and make it explicit in the log.
-            requested = status.cooling_set_point
+        applied = await self._read_back(update_status)
+        if applied is None or self._matches(applied, update_status):
+            return self.status
+        if update_status.cooling_set_point == update_status.heating_set_point:
             logger.warning(
-                f"{self.log_id} device is not in dual set-point mode but cooling "
-                f"({status.cooling_set_point}) and heating ({status.heating_set_point}) "
-                f"were both requested; using {requested} for both"
+                f"{self.log_id} the device did not apply the set point "
+                f"{update_status.cooling_set_point} (it still reports "
+                f"{applied.cooling_set_point}/{applied.heating_set_point})"
             )
+            return self.status
 
-        logger.debug(
-            f"{self.log_id} shared set-point mode: writing {requested} to both set points"
+        return await self._retry_shared(update_status, previous, applied)
+
+    async def _read_back(self, update_status: "SetPointStatus"):
+        """Query the device to find out whether the write was really applied.
+
+        A failed read is not an error here: it only means the outcome is unknown,
+        so the status written is kept as-is.
+        """
+        try:
+            return await self.query()
+        except Exception as err:
+            logger.debug(f"{self.log_id} could not read the set points back: {err}")
+            self.status = update_status
+            return None
+
+    @staticmethod
+    def _matches(applied: "SetPointStatus", requested: "SetPointStatus") -> bool:
+        return (
+            applied.cooling_set_point == requested.cooling_set_point
+            and applied.heating_set_point == requested.heating_set_point
         )
-        status.cooling_set_point = requested
-        status.heating_set_point = requested
+
+    async def _retry_shared(
+        self,
+        update_status: "SetPointStatus",
+        previous: "SetPointStatus",
+        applied: "SetPointStatus",
+    ) -> FeatureStatus:
+        """Write the requested temperature to both set points.
+
+        Reached when the device refused two differing set points. Callers only know
+        the mode they are acting on (e.g. cooling while in COOL) and leave the other
+        set point at its previous value, so the one that changed carries the
+        requested temperature.
+        """
+        cooling_changed = update_status.cooling_set_point != previous.cooling_set_point
+        heating_changed = update_status.heating_set_point != previous.heating_set_point
+
+        if heating_changed and not cooling_changed:
+            requested = update_status.heating_set_point
+        else:
+            # Cooling changed, or both did and there is no way to tell which one
+            # was meant: use cooling and say so.
+            requested = update_status.cooling_set_point
+            if cooling_changed and heating_changed:
+                logger.warning(
+                    f"{self.log_id} both set points were changed but the device shares "
+                    f"one; using {requested} for both"
+                )
+
+        logger.info(
+            f"{self.log_id} device refused cooling {update_status.cooling_set_point} / "
+            f"heating {update_status.heating_set_point}; it shares a single set point, "
+            f"retrying with {requested} on both"
+        )
+
+        shared = self.new_status()
+        for param in self.RANGE_PARAMS:
+            setattr(shared, param, getattr(applied, param))
+        shared.cooling_set_point = requested
+        shared.heating_set_point = requested
+
+        await super().update(shared)
+        confirmed = await self._read_back(shared)
+        if confirmed is not None and not self._matches(confirmed, shared):
+            logger.warning(
+                f"{self.log_id} the device did not apply the set point {requested} "
+                f"either (it still reports {confirmed.cooling_set_point}/"
+                f"{confirmed.heating_set_point})"
+            )
+        return self.status
 
     def _warn_out_of_range(self, status: "SetPointStatus"):
         """Log the set points the device would refuse, so a rejected command is
