@@ -1,9 +1,12 @@
 """This module contains the classes used to control the Set Point feature (temperatures set by the user)
 """
 
+import logging
 from typing import Dict
 from pymadoka.feature import Feature, FeatureStatus
 from pymadoka.connection import Connection
+
+logger = logging.getLogger(__name__)
 
 class SetPointStatus(FeatureStatus):
     """
@@ -62,47 +65,75 @@ class SetPointStatus(FeatureStatus):
         self.heating_upperlimit_symbol = 0
         
     def set_values(self, values:Dict[str,bytearray]):
-        """See base class."""
-        
-        self.cooling_set_point = round(int.from_bytes(values[self.COOLING_IDX[0]],"big")/128.0)
-        self.heating_set_point = round(int.from_bytes(values[self.HEATING_IDX[0]],"big")/128.0)
-        self.range_enabled = round(int.from_bytes(values[self.RANGE_ENABLED_IDX[0]],"big")/128.0)
-        self.mode = round(int.from_bytes(values[self.MODE_IDX[0]],"big")/128.0)
-        self.min_differential = round(int.from_bytes(values[self.MINIMUM_DIFFERENTIAL_IDX[0]],"big")/128.0)
-        self.min_cooling_lowerlimit = round(int.from_bytes(values[self.MIN_COOLING_LOWERLIMIT_IDX[0]],"big")/128.0)
-        self.min_heating_lowerlimit = round(int.from_bytes(values[self.MIN_HEATING_LOWERLIMIT_IDX[0]],"big")/128.0)
-        self.cooling_lowerlimit = round(int.from_bytes(values[self.COOLING_LOWERLIMIT_IDX[0]],"big")/128.0)
-        self.heating_lowerlimit = round(int.from_bytes(values[self.HEATING_LOWERLIMIT_IDX[0]],"big")/128.0)
-        self.cooling_lowerlimit_symbol = round(int.from_bytes(values[self.COOLING_LOWERLIMIT_SYMBOL_IDX[0]],"big")/128.0)
-        self.heating_lowerlimit_symbol = round(int.from_bytes(values[self.HEATING_LOWERLIMIT_SYMBOL_IDX[0]],"big")/128.0)
-        self.max_cooling_upperlimit = round(int.from_bytes(values[self.MAX_COOLING_UPPERLIMIT_IDX[0]],"big")/128.0)
-        self.max_heating_upperlimit = round(int.from_bytes(values[self.MAX_HEATING_UPPERLIMIT_IDX[0]],"big")/128.0)
-        self.cooling_upperlimit = round(int.from_bytes(values[self.COOLING_UPPERLIMIT_IDX[0]],"big")/128.0)
-        self.heating_upperlimit = round(int.from_bytes(values[self.HEATING_UPPERLIMIT_IDX[0]],"big")/128.0)
-        self.cooling_upperlimit_symbol = round(int.from_bytes(values[self.COOLING_UPPERLIMIT_SYMBOL_IDX[0]],"big")/128.0)
-        self.heating_upperlimit_symbol = round(int.from_bytes(values[self.HEATING_UPPERLIMIT_SYMBOL_IDX[0]],"big")/128.0)
-        
+        """See base class.
+
+        Only the 2-byte parameters carry a temperature in the device's 1/128
+        degree scale. Flags, symbols and the differential are single-byte plain
+        values: dividing them by 128 would collapse every one of them to 0 and
+        the value could no longer be echoed back on a write.
+        """
+
+        def read(idx, current):
+            raw = values.get(idx[0])
+            if raw is None:
+                return current
+            value = int.from_bytes(raw, "big")
+            return round(value / 128.0) if idx[1] == 2 else value
+
+        self.cooling_set_point = read(self.COOLING_IDX, self.cooling_set_point)
+        self.heating_set_point = read(self.HEATING_IDX, self.heating_set_point)
+        self.range_enabled = read(self.RANGE_ENABLED_IDX, self.range_enabled)
+        self.mode = read(self.MODE_IDX, self.mode)
+        self.min_differential = read(self.MINIMUM_DIFFERENTIAL_IDX, self.min_differential)
+        self.min_cooling_lowerlimit = read(self.MIN_COOLING_LOWERLIMIT_IDX, self.min_cooling_lowerlimit)
+        self.min_heating_lowerlimit = read(self.MIN_HEATING_LOWERLIMIT_IDX, self.min_heating_lowerlimit)
+        self.cooling_lowerlimit = read(self.COOLING_LOWERLIMIT_IDX, self.cooling_lowerlimit)
+        self.heating_lowerlimit = read(self.HEATING_LOWERLIMIT_IDX, self.heating_lowerlimit)
+        self.cooling_lowerlimit_symbol = read(self.COOLING_LOWERLIMIT_SYMBOL_IDX, self.cooling_lowerlimit_symbol)
+        self.heating_lowerlimit_symbol = read(self.HEATING_LOWERLIMIT_SYMBOL_IDX, self.heating_lowerlimit_symbol)
+        self.max_cooling_upperlimit = read(self.MAX_COOLING_UPPERLIMIT_IDX, self.max_cooling_upperlimit)
+        self.max_heating_upperlimit = read(self.MAX_HEATING_UPPERLIMIT_IDX, self.max_heating_upperlimit)
+        self.cooling_upperlimit = read(self.COOLING_UPPERLIMIT_IDX, self.cooling_upperlimit)
+        self.heating_upperlimit = read(self.HEATING_UPPERLIMIT_IDX, self.heating_upperlimit)
+        self.cooling_upperlimit_symbol = read(self.COOLING_UPPERLIMIT_SYMBOL_IDX, self.cooling_upperlimit_symbol)
+        self.heating_upperlimit_symbol = read(self.HEATING_UPPERLIMIT_SYMBOL_IDX, self.heating_upperlimit_symbol)
+
+
         
     def get_values(self) -> Dict[str,bytearray]:
-        """See base class."""
+        """See base class.
+
+        Every parameter is serialized from the instance attributes, never from
+        hardcoded zeros: the device rejects a set-point write whose range/limit
+        parameters contradict the ones it currently holds (they are configurable
+        from the official Daikin app), so the values read back from the device
+        must be echoed unchanged and only the set points modified.
+        """
         values = {}
-        values[self.COOLING_IDX[0]] = (self.cooling_set_point*128).to_bytes(self.COOLING_IDX[1],"big")
-        values[self.HEATING_IDX[0]] = (self.heating_set_point*128).to_bytes(self.HEATING_IDX[1],"big")
-        values[self.RANGE_ENABLED_IDX[0]] = (0).to_bytes(self.RANGE_ENABLED_IDX[1],"big")
-        values[self.MODE_IDX[0]] = (2).to_bytes(self.MODE_IDX[1],"big")
-        values[self.MINIMUM_DIFFERENTIAL_IDX[0]] = (0).to_bytes(self.MINIMUM_DIFFERENTIAL_IDX[1],"big")
-        values[self.MIN_COOLING_LOWERLIMIT_IDX[0]] = (0).to_bytes(self.MIN_COOLING_LOWERLIMIT_IDX[1],"big")
-        values[self.MIN_HEATING_LOWERLIMIT_IDX[0]] = (0).to_bytes(self.MIN_HEATING_LOWERLIMIT_IDX[1],"big")
-        values[self.COOLING_LOWERLIMIT_IDX[0]] = (0).to_bytes(self.COOLING_LOWERLIMIT_IDX[1],"big")
-        values[self.HEATING_LOWERLIMIT_IDX[0]] = (0).to_bytes(self.HEATING_LOWERLIMIT_IDX[1],"big")
-        values[self.COOLING_LOWERLIMIT_SYMBOL_IDX[0]] = (0).to_bytes(self.COOLING_LOWERLIMIT_SYMBOL_IDX[1],"big")
-        values[self.HEATING_LOWERLIMIT_SYMBOL_IDX[0]] = (0).to_bytes(self.HEATING_LOWERLIMIT_SYMBOL_IDX[1],"big")
-        values[self.MAX_COOLING_UPPERLIMIT_IDX[0]] = (0).to_bytes(self.MAX_COOLING_UPPERLIMIT_IDX[1],"big")
-        values[self.MAX_HEATING_UPPERLIMIT_IDX[0]] = (0).to_bytes(self.MAX_HEATING_UPPERLIMIT_IDX[1],"big")
-        values[self.COOLING_UPPERLIMIT_IDX[0]] = (0).to_bytes(self.COOLING_UPPERLIMIT_IDX[1],"big")
-        values[self.HEATING_UPPERLIMIT_IDX[0]] = (0).to_bytes(self.HEATING_UPPERLIMIT_IDX[1],"big")
-        values[self.COOLING_UPPERLIMIT_SYMBOL_IDX[0]] = (0).to_bytes(self.COOLING_UPPERLIMIT_SYMBOL_IDX[1],"big")
-        values[self.HEATING_UPPERLIMIT_SYMBOL_IDX[0]] = (0).to_bytes(self.HEATING_UPPERLIMIT_SYMBOL_IDX[1],"big")
+        for idx, value in (
+            (self.COOLING_IDX, self.cooling_set_point),
+            (self.HEATING_IDX, self.heating_set_point),
+            (self.RANGE_ENABLED_IDX, self.range_enabled),
+            (self.MODE_IDX, self.mode),
+            (self.MINIMUM_DIFFERENTIAL_IDX, self.min_differential),
+            (self.MIN_COOLING_LOWERLIMIT_IDX, self.min_cooling_lowerlimit),
+            (self.MIN_HEATING_LOWERLIMIT_IDX, self.min_heating_lowerlimit),
+            (self.COOLING_LOWERLIMIT_IDX, self.cooling_lowerlimit),
+            (self.HEATING_LOWERLIMIT_IDX, self.heating_lowerlimit),
+            (self.COOLING_LOWERLIMIT_SYMBOL_IDX, self.cooling_lowerlimit_symbol),
+            (self.HEATING_LOWERLIMIT_SYMBOL_IDX, self.heating_lowerlimit_symbol),
+            (self.MAX_COOLING_UPPERLIMIT_IDX, self.max_cooling_upperlimit),
+            (self.MAX_HEATING_UPPERLIMIT_IDX, self.max_heating_upperlimit),
+            (self.COOLING_UPPERLIMIT_IDX, self.cooling_upperlimit),
+            (self.HEATING_UPPERLIMIT_IDX, self.heating_upperlimit),
+            (self.COOLING_UPPERLIMIT_SYMBOL_IDX, self.cooling_upperlimit_symbol),
+            (self.HEATING_UPPERLIMIT_SYMBOL_IDX, self.heating_upperlimit_symbol),
+        ):
+            param_id, size = idx
+            # Temperatures use the device's 1/128 degree scale (2 bytes), flags and
+            # symbols are plain single-byte values.
+            raw = round(value * 128) if size == 2 else int(value)
+            values[param_id] = raw.to_bytes(size, "big")
         return values
 
 class SetPoint(Feature):
@@ -128,3 +159,52 @@ class SetPoint(Feature):
     def new_status(self) -> FeatureStatus:
         """See base class."""
         return SetPointStatus(0,0)
+
+    # Parameters that describe the set-point range configuration. They belong to
+    # the device (they can be changed from the official Daikin app) and must be
+    # written back exactly as read, otherwise the device silently rejects the
+    # whole set-point command.
+    RANGE_PARAMS = (
+        "range_enabled",
+        "mode",
+        "min_differential",
+        "min_cooling_lowerlimit",
+        "min_heating_lowerlimit",
+        "cooling_lowerlimit",
+        "heating_lowerlimit",
+        "cooling_lowerlimit_symbol",
+        "heating_lowerlimit_symbol",
+        "max_cooling_upperlimit",
+        "max_heating_upperlimit",
+        "cooling_upperlimit",
+        "heating_upperlimit",
+        "cooling_upperlimit_symbol",
+        "heating_upperlimit_symbol",
+    )
+
+    async def update(self, update_status: FeatureStatus) -> FeatureStatus:
+        """Update the set points, preserving the device's range configuration.
+
+        Callers build a `SetPointStatus` with the set points only, so the range
+        parameters are taken from the last status read from the device.
+        """
+        if self.status is not None:
+            for param in self.RANGE_PARAMS:
+                setattr(update_status, param, getattr(self.status, param))
+            if update_status.range_enabled:
+                self._warn_out_of_range(update_status)
+        return await super().update(update_status)
+
+    def _warn_out_of_range(self, status: "SetPointStatus"):
+        """Log the set points the device would refuse, so a rejected command is
+        not silent. The device enforces the range limits when range_enabled is set
+        and drops the whole command instead of clamping."""
+        for label, value, lower, upper in (
+            ("cooling", status.cooling_set_point, status.cooling_lowerlimit, status.cooling_upperlimit),
+            ("heating", status.heating_set_point, status.heating_lowerlimit, status.heating_upperlimit),
+        ):
+            if upper and not (lower <= value <= upper):
+                logger.warning(
+                    f"{label} set point {value} is outside the range configured on the "
+                    f"device ({lower}-{upper}); the device may refuse the command"
+                )
