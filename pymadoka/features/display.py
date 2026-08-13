@@ -18,25 +18,31 @@ class DisplayStatus(FeatureStatus):
     Attributes:
         brightness (int): Display brightness, 0-19
         contrast (int): Display contrast, 0-19
+        ring_brightness (int): Brightness of the status ring, 0-19
         other (Dict[int,bytearray]): Every other parameter reported by the
             device, keyed by parameter id, kept as read for further analysis
     """
 
     BRIGHTNESS_IDX = 0x32
     CONTRAST_IDX = 0x31
+    RING_BRIGHTNESS_IDX = 0x33
 
     MIN_LEVEL = 0
     MAX_LEVEL = 19
 
-    def __init__(self, brightness:int = None, contrast:int = None):
+    def __init__(self, brightness:int = None, contrast:int = None,
+                 ring_brightness:int = None):
         """Inits with the display settings.
 
         Attributes:
             brightness (int): Display brightness, 0-19, None to leave untouched
             contrast (int): Display contrast, 0-19, None to leave untouched
+            ring_brightness (int): Status ring brightness, 0-19, None to leave
+                untouched
         """
         self.brightness = brightness
         self.contrast = contrast
+        self.ring_brightness = ring_brightness
         self.other = {}
 
     def set_values(self, values:Dict[int,bytearray]):
@@ -50,8 +56,12 @@ class DisplayStatus(FeatureStatus):
         if contrast:
             self.contrast = contrast[0]
 
-        self.other = {k:v for k,v in values.items()
-                      if k not in (self.BRIGHTNESS_IDX, self.CONTRAST_IDX)}
+        ring_brightness = values.get(self.RING_BRIGHTNESS_IDX)
+        if ring_brightness:
+            self.ring_brightness = ring_brightness[0]
+
+        known = (self.BRIGHTNESS_IDX, self.CONTRAST_IDX, self.RING_BRIGHTNESS_IDX)
+        self.other = {k:v for k,v in values.items() if k not in known}
 
     def get_values(self) -> Dict[int,bytearray]:
         """See base class.
@@ -67,6 +77,9 @@ class DisplayStatus(FeatureStatus):
 
         if self.contrast is not None:
             values[self.CONTRAST_IDX] = bytes([self.contrast])
+
+        if self.ring_brightness is not None:
+            values[self.RING_BRIGHTNESS_IDX] = bytes([self.ring_brightness])
 
         return values
 
