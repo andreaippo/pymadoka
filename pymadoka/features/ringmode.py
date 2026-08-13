@@ -7,7 +7,11 @@ from pymadoka.feature import Feature, FeatureStatus
 from pymadoka.connection import Connection
 
 class RingModeEnum(IntEnum):
-    """Behaviour of the status ring, in the order the official app lists it."""
+    """Behaviour of the status ring, in the order the official app lists it.
+
+    Both hotel modes stop the ring from blinking on an error. Hotel 2 goes
+    further and shows no status at all while the screen is dimmed.
+    """
     NORMAL = 0
     HOTEL_1 = 1
     HOTEL_2 = 2
