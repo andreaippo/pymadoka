@@ -142,17 +142,27 @@ class RingMode(Feature):
         """See base class."""
         return RingModeStatus()
 
+    async def _session(self, opened: bool):
+        """Open or close the edit session.
+
+        The command is sent without going through `update`: that would store
+        the session status as the feature status, wiping the arrays just read.
+        The session carries no state worth keeping.
+        """
+        status = RingModeStatus(session=opened)
+        await self._roundtrip(self.update_cmd_id(), status.serialize())
+
     async def query(self) -> FeatureStatus:
         """Read the arrays, wrapped in the edit session the app uses.
 
         The official app never reads this feature outside a session, so the
         session is opened here too. It costs two extra round-trips per read.
         """
-        await super().update(RingModeStatus(session=True))
+        await self._session(True)
         try:
             return await super().query()
         finally:
-            await super().update(RingModeStatus(session=False))
+            await self._session(False)
 
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Write the ring mode, wrapped in the edit session the app uses.
@@ -165,9 +175,9 @@ class RingMode(Feature):
         The device is read back at the end because the response to a write does
         not carry the array.
         """
-        await super().update(RingModeStatus(session=True))
+        await self._session(True)
         try:
             await super().update(update_status)
         finally:
-            await super().update(RingModeStatus(session=False))
+            await self._session(False)
         return await self.query()
