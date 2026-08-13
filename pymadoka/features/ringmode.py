@@ -8,7 +8,7 @@ from pymadoka.connection import Connection
 
 class RingModeEnum(IntEnum):
     """Behaviour of the status ring, in the order the official app lists it."""
-    HOME = 0
+    NORMAL = 0
     HOTEL_1 = 1
     HOTEL_2 = 2
 
