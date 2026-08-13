@@ -14,6 +14,7 @@ from pymadoka.features.setpoint import SetPoint
 from pymadoka.features.temperatures import Temperatures
 from pymadoka.features.clean_filter import CleanFilterIndicator,ResetCleanFilterTimer
 from pymadoka.features.display import Display
+from pymadoka.features.ringmode import RingMode
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class Controller:
         self.clean_filter_indicator = CleanFilterIndicator(self.connection)
         self.reset_clean_filter_timer = ResetCleanFilterTimer(self.connection)
         self.display = Display(self.connection)
+        self.ring_mode = RingMode(self.connection)
         
 
     async def start(self):

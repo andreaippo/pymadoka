@@ -6,6 +6,7 @@ from .features.clean_filter import CleanFilterIndicator, CleanFilterIndicatorSta
 from .features.display import Display, DisplayStatus
 from .features.fanspeed import FanSpeed, FanSpeedStatus, FanSpeedEnum
 from .features.operationmode import OperationMode, OperationModeStatus, OperationModeEnum
+from .features.ringmode import RingMode, RingModeStatus, RingModeEnum
 from .features.power import PowerState, PowerStateStatus
 from .features.setpoint import SetPoint, SetPointStatus
 from .features.temperatures import Temperatures, TemperaturesStatus
