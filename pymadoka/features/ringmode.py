@@ -124,16 +124,9 @@ class RingMode(Feature):
     """
     This class is used to control the behaviour of the status ring
 
-    Reading it costs three round-trips (the read is wrapped in an edit session),
-    for a setting that only changes when somebody changes it, so it is left out
-    of the poll cycle: `query` has to be called explicitly.
-
     Attributes:
         status (RingModeStatus): Current status
     """
-
-    # See the class docstring: too expensive to read on every poll cycle.
-    polled = False
 
     def __init__(self, connection: Connection):
         """See base class."""
@@ -162,28 +155,17 @@ class RingMode(Feature):
         status = RingModeStatus(session=opened)
         await self._roundtrip(self.update_cmd_id(), status.serialize())
 
-    async def query(self) -> FeatureStatus:
-        """Read the arrays, wrapped in the edit session the app uses.
-
-        The official app never reads this feature outside a session, so the
-        session is opened here too. It costs two extra round-trips per read.
-        """
-        await self._session(True)
-        try:
-            return await super().query()
-        finally:
-            await self._session(False)
-
     async def update(self, update_status: FeatureStatus) -> FeatureStatus:
         """Write the ring mode, wrapped in the edit session the app uses.
 
-        The official app opens a session, writes, and closes it. Whether the
-        device enforces it is unknown, so the sequence is reproduced as
-        captured. The session is closed even when the write fails, otherwise
-        the device would be left in edit mode.
+        In the capture, the official app opens the session, reads, writes, reads
+        again and closes: the session brackets the change, not each command.
+        Whether the device enforces it is unknown, so it is reproduced around
+        the write. It is closed even when the write fails, otherwise the device
+        would be left in edit mode.
 
-        The device is read back at the end because the response to a write does
-        not carry the array.
+        The device is read back afterwards, outside the session, because the
+        response to a write does not carry the array.
         """
         await self._session(True)
         try:

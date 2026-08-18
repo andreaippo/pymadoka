@@ -121,12 +121,6 @@ class Feature(ABC):
         connection (Connection): Connection to be used to send messages
         status (FeatureStatus): Status 
     """
-
-    # Whether `Controller.update` reads this feature on every poll cycle.
-    # A setting that only ever changes because somebody changed it is not worth
-    # a BLE round-trip per cycle: those features are read on demand instead.
-    polled = True
-
     def __init__(self, connection: Connection):
         """Inits the feature with the connection.
 
