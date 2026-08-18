@@ -20,19 +20,35 @@ class FanSpeedStatus(FeatureStatus):
     This class is used to store the Fan Speed status.
 
     Asked with no parameter the device answers the whole block, not just the two
-    speeds: the extra parameters are kept as read in `other`, because which fan
-    speeds an indoor unit actually accepts is expected to be in there and is not
-    mapped yet.
+    speeds. Two of the extra parameters are a bit mask of the speeds the indoor
+    unit accepts, one per mode; the rest are kept as read in `other`.
+
+    Only bit 0 of the masks is mapped, and it means the automatic speed. It was
+    read off four indoor units: three accept the automatic speed and report 0x0d
+    for heating, the fourth refuses it, from the official app as much as from
+    here, and reports 0x0c. The cooling mask is 0x1d on all four. The remaining
+    bits do not line up with the low and high speeds in any obvious way, so
+    nothing is claimed about them.
 
     Attributes:
         cooling_fan_speed (FanSpeedEnum): Cooling fan speed
         heating_fan_speed (FanSpeedEnum): Heating fan speed
+        cooling_speeds (int): Mask of the speeds accepted while cooling, None
+            until the whole block has been read
+        heating_speeds (int): Mask of the speeds accepted while heating, None
+            likewise
         other (Dict[int,bytearray]): Every other parameter reported by the
             device, keyed by parameter id, kept as read for further analysis
     """
 
     COOLING_IDX = 0x20
     HEATING_IDX = 0x21
+
+    COOLING_SPEEDS_IDX = 0x12
+    HEATING_SPEEDS_IDX = 0x13
+
+    # Bit of the masks above that stands for the automatic speed.
+    AUTO_BIT = 0x01
 
     def __init__(self,cooling_fan_speed:FanSpeedEnum = None, heating_fan_speed:FanSpeedEnum = None):
         """Inits with the cooling and heating fan speeds.
@@ -44,7 +60,25 @@ class FanSpeedStatus(FeatureStatus):
         """
         self.cooling_fan_speed = cooling_fan_speed
         self.heating_fan_speed = heating_fan_speed
+        self.cooling_speeds = None
+        self.heating_speeds = None
         self.other = {}
+
+    @property
+    def supports_auto(self) -> bool:
+        """Whether the indoor unit accepts the automatic fan speed.
+
+        True while the masks have not been read, so a unit is not stripped of a
+        speed it does have on the strength of a value nobody has seen yet.
+
+        Both masks have to carry the bit. A unit that took the automatic speed
+        in one mode and refused it in the other would still be described by a
+        single set of speeds upstream, so the narrower answer is the safe one.
+        """
+        masks = [m for m in (self.cooling_speeds, self.heating_speeds) if m is not None]
+        if not masks:
+            return True
+        return all(mask & self.AUTO_BIT for mask in masks)
 
     def set_values(self, values:Dict[str,bytearray]):
         """See base class.
@@ -72,7 +106,22 @@ class FanSpeedStatus(FeatureStatus):
         if heating is not None:
             self.heating_fan_speed = heating
 
-        known = (self.COOLING_IDX, self.HEATING_IDX)
+        def read_mask(idx):
+            raw = values.get(idx)
+            if raw is None:
+                return None
+            return int.from_bytes(raw,"big")
+
+        cooling_speeds = read_mask(self.COOLING_SPEEDS_IDX)
+        if cooling_speeds is not None:
+            self.cooling_speeds = cooling_speeds
+
+        heating_speeds = read_mask(self.HEATING_SPEEDS_IDX)
+        if heating_speeds is not None:
+            self.heating_speeds = heating_speeds
+
+        known = (self.COOLING_IDX, self.HEATING_IDX,
+                 self.COOLING_SPEEDS_IDX, self.HEATING_SPEEDS_IDX)
         self.other = {k:v for k,v in values.items() if k not in known}
 
     def get_values(self) -> Dict[str,bytearray]:
