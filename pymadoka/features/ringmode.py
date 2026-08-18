@@ -27,7 +27,9 @@ class RingModeStatus(FeatureStatus):
 
     A write sends the same array with 0xff on every entry that must keep its
     value, so a single setting can be changed without knowing the meaning of
-    the others.
+    the others. This was confirmed against a capture of the official app: it
+    wrote 0xff on the fifteen other entries and a read taken right after showed
+    only the entry at MODE_INDEX changed.
 
     Attributes:
         mode (RingModeEnum): Behaviour of the status ring
@@ -122,9 +124,17 @@ class RingMode(Feature):
     """
     This class is used to control the behaviour of the status ring
 
+    Reading it costs three round-trips (the read is wrapped in an edit session),
+    for a setting that only changes when somebody changes it, so it is left out
+    of the poll cycle: `query` has to be called explicitly.
+
     Attributes:
         status (RingModeStatus): Current status
     """
+
+    # See the class docstring: too expensive to read on every poll cycle.
+    polled = False
+
     def __init__(self, connection: Connection):
         """See base class."""
         self.status = None

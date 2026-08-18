@@ -74,11 +74,18 @@ class Controller:
         await self.connection.cleanup()
     
     async def update(self):
-        """Iterate over all the features and query their status.
+        """Iterate over the polled features and query their status.
+
+        Features flagged as not polled are skipped: they hold settings that
+        only change when somebody changes them, and reading them every cycle
+        would spend BLE round-trips on an adapter that may be shared by several
+        devices. Callers read those directly when they need them.
         """ 
         
         for var in vars(self).values():
             if isinstance(var,Feature):
+                if not var.polled:
+                    continue
                 try:
                     await var.query()
                 except NotImplementedException as e:
