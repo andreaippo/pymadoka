@@ -74,11 +74,17 @@ class Controller:
         await self.connection.cleanup()
     
     async def update(self):
-        """Iterate over all the features and query their status.
+        """Iterate over the polled features and query their status.
+
+        Features flagged as not polled are skipped: reading them costs more
+        round-trips than the value is worth on every cycle, on an adapter that
+        may be shared by several devices. Callers read those when they want to.
         """ 
         
         for var in vars(self).values():
             if isinstance(var,Feature):
+                if not var.polled:
+                    continue
                 try:
                     await var.query()
                 except NotImplementedException as e:
