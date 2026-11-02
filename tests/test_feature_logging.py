@@ -41,3 +41,8 @@ async def test_update_logs_carry_the_address_and_the_status_written(caplog):
     assert messages
     assert all(m.startswith(f"[{ADDRESS}] SetPoint ") for m in messages)
     assert '"cooling_set_point": 25' in messages[-1]
+
+
+def test_log_id_without_a_connection():
+    """Callers build features with no connection to test codecs alone."""
+    assert SetPoint(None).log_id == "[None] SetPoint"
