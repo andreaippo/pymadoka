@@ -141,7 +141,7 @@ class Feature(ABC):
     def log_id(self) -> str:
         """Device address and feature name, so the log lines of several
         devices controlled from the same process can be told apart."""
-        return f"[{self.connection.address}] {self.__class__.__name__}"
+        return f"[{getattr(self.connection, 'address', None)}] {self.__class__.__name__}"
     
     
     @abstractmethod
