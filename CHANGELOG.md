@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **A command whose link is gone fails at once instead of after 10 s.** A
+  request waiting for its response when the link dropped, or when the
+  connection was cleaned up, was never failed: the caller held the operation
+  lock for the full 10 s response timeout and got `TimeoutError`. Pending
+  requests are now cancelled on disconnect and on cleanup, so the caller gets
+  a `ConnectionException` right away.
+- **A command whose chunks could not be written no longer breaks the next
+  query.** `send()` raised `ConnectionException` but left the request queued,
+  and the caller had no way to remove it. The next reply for that command
+  resolved the orphan, and the next query timed out after 10 s although the
+  thermostat had answered it. The request is now dropped, and sending stops
+  at the first chunk that cannot be written instead of going on to deliver a
+  truncated message. A reply also skips requests that are already finished
+  instead of being lost on them.
+
 ## v0.5.0
 
 - **Display brightness and contrast, and the eye is the status ring.** A new
