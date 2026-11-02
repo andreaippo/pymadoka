@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Writing only the set points no longer resets the device's range
+  configuration.** A freshly built `SetPointStatus(cooling, heating)`, as the
+  CLI and MQTT bridge pass to `SetPoint.update()`, serialized the legacy
+  defaults: range disabled, mode 2, every limit 0. A thermostat with a range
+  or limits set from the Daikin app silently drops such a write, or has its
+  configuration overwritten, and the cached status then carried the zeros
+  into later writes until the next poll. A fresh status now inherits the
+  device's own parameters, except the two set points, from the last status
+  read. A status parsed from the device (Home Assistant copies it) is sent
+  unchanged.
+
 ## v0.4.2
 
 - **A negative outdoor temperature is no longer read as 128 or more.** The

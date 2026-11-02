@@ -170,3 +170,26 @@ class SetPoint(Feature):
     def new_status(self) -> FeatureStatus:
         """See base class."""
         return SetPointStatus(0,0)
+
+    async def update(self, update_status: FeatureStatus) -> FeatureStatus:
+        """Update the set points, keeping the device's range configuration.
+
+        Callers (cli, mqtt) build a fresh `SetPointStatus(cooling, heating)`,
+        which serializes the legacy defaults: range disabled, MODE=2 and every
+        limit 0. A device with a range configuration (set from the Daikin app)
+        silently drops such a write, or has its configuration clobbered. So a
+        fresh status inherits the device's raw params, except the set points,
+        from the last status read. A status parsed from the device is sent as is.
+        """
+        if (
+            isinstance(update_status, SetPointStatus)
+            and not update_status._raw_values
+            and self.status is not None
+            and self.status._raw_values
+        ):
+            update_status._raw_values = {
+                key: raw
+                for key, raw in self.status._raw_values.items()
+                if key not in (SetPointStatus.COOLING_IDX[0], SetPointStatus.HEATING_IDX[0])
+            }
+        return await super().update(update_status)
