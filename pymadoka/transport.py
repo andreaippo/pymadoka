@@ -75,7 +75,8 @@ class Transport:
         if len(self.chunks) <= 0:
             return False
         
-        expected_size = math.ceil(self.chunks[0][1] / MAX_CHUNK_SIZE)
+        # Each chunk spends one byte on its sequence id: 19 bytes of payload.
+        expected_size = math.ceil(self.chunks[0][1] / (MAX_CHUNK_SIZE - 1))
        
         if len(self.chunks) != expected_size:
             return False
