@@ -37,7 +37,7 @@ def transport(delegate):
     return Transport(delegate)
 
 
-@pytest.mark.parametrize("size", [5, 19, 30, 45])
+@pytest.mark.parametrize("size", [5, 19, 20, 30, 39, 40, 45, 58, 60])
 def test_split_and_rebuild_round_trip(transport, delegate, size):
     """Chunks produced by split_in_chunks rebuild into the original message."""
     message = make_message(size)
