@@ -82,3 +82,52 @@ def test_restarted_sequence_discards_previous_chunks(transport, delegate):
 
     assert len(delegate.failed) == 1
     assert delegate.rebuilt == [bytes(make_message(7))]
+
+
+def test_clear_resets_sequence(transport, delegate):
+    """After clear() the next message starts clean, with no spurious failure."""
+    # Two of the three chunks of a 45-byte message; the tail never arrives.
+    stale = transport.split_in_chunks(make_message(45))
+    transport.rebuild_chunk(stale[0])
+    transport.rebuild_chunk(stale[1])
+
+    transport.clear()
+
+    message = make_message(45)
+    for chunk in transport.split_in_chunks(message):
+        transport.rebuild_chunk(chunk)
+
+    assert delegate.failed == []
+    assert delegate.rebuilt == [bytes(message)]
+
+
+def test_duplicate_chunk_is_dropped(transport, delegate):
+    """A repeated continuation chunk does not restart the message."""
+    message = make_message(45)
+    chunks = transport.split_in_chunks(message)
+
+    for chunk in [chunks[0], chunks[1], chunks[1], chunks[2]]:
+        transport.rebuild_chunk(chunk)
+
+    assert delegate.failed == []
+    assert delegate.rebuilt == [bytes(message)]
+
+
+def test_out_of_sequence_chunk_is_dropped(transport, delegate):
+    """Only chunk 0 starts a message and only last_id + 1 continues it."""
+    message = make_message(45)
+    chunks = transport.split_in_chunks(message)
+
+    # A continuation with no message in progress is not a message start.
+    transport.rebuild_chunk(chunks[1])
+    assert transport.chunks == []
+
+    # A gap in the sequence is dropped instead of being stored.
+    transport.rebuild_chunk(chunks[0])
+    transport.rebuild_chunk(chunks[2])
+    assert transport.chunks == [chunks[0]]
+
+    transport.rebuild_chunk(chunks[1])
+    transport.rebuild_chunk(chunks[2])
+    assert delegate.failed == []
+    assert delegate.rebuilt == [bytes(message)]
