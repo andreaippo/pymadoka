@@ -18,6 +18,7 @@ from pymadoka.features.setpoint import SetPoint
 from pymadoka.features.temperatures import Temperatures
 from pymadoka.features.clean_filter import CleanFilterIndicator,ResetCleanFilterTimer
 from pymadoka.features.display import Display
+from pymadoka.features.ringmode import RingMode
 from pymadoka.features.ventilation import Ventilation
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ class Controller:
         self.clean_filter_indicator = CleanFilterIndicator(self.connection)
         self.reset_clean_filter_timer = ResetCleanFilterTimer(self.connection)
         self.display = Display(self.connection)
+        self.ring_mode = RingMode(self.connection)
 
 
     async def start(self):
@@ -149,6 +151,9 @@ class Controller:
         answered = 0
         for var in vars(self).values():
             if not isinstance(var, Feature):
+                continue
+            # Too costly to read every cycle: the caller queries it explicitly.
+            if not var.polled:
                 continue
 
             for attempt in range(query_retries + 1):

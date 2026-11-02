@@ -8,6 +8,7 @@ from .features.display import Display, DisplayStatus
 from .features.eye_brightness import EyeBrightness, EyeBrightnessStatus
 from .features.fanspeed import FanSpeed, FanSpeedStatus, FanSpeedEnum
 from .features.operationmode import OperationMode, OperationModeStatus, OperationModeEnum
+from .features.ringmode import RingMode, RingModeStatus, RingModeEnum
 from .features.power import PowerState, PowerStateStatus
 from .features.setpoint import SetPoint, SetPointStatus
 from .features.temperatures import Temperatures, TemperaturesStatus
@@ -46,6 +47,9 @@ __all__ = [
     "OperationModeStatus",
     "OperationModeEnum",
     "PowerState",
+    "RingMode",
+    "RingModeStatus",
+    "RingModeEnum",
     "PowerStateStatus",
     "SetPoint",
     "SetPointStatus",
