@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.3
+
+- **The fan speeds a unit accepts are read from the device.** `FanSpeed` now
+  queries function 0x0050 with no argument, the way the official app does, so
+  the device answers the whole block instead of the two speeds the query used
+  to carry. Arguments 0x12 (cooling) and 0x13 (heating) are a mask of the
+  accepted speeds, exposed as `FanSpeedStatus.cooling_speeds` and
+  `heating_speeds`; arguments not modelled are kept in `other`.
+
+  Only bit 0 is mapped, and it means the automatic speed:
+  `FanSpeedStatus.supports_auto` is false when either mask lacks it. Read off
+  four indoor units: the three that take the automatic speed report 0x0d for
+  heating, the one that refuses it (from the official app too) reports 0x0c.
+  The cooling mask is 0x1d on all four. The other bits do not line up with
+  low/mid/high in any obvious way, so nothing is claimed about them.
+
+  `supports_auto` stays true until the masks have been read, and `update()`
+  carries the masks (and a speed it did not write) over from the last read,
+  so a write does not bring the automatic speed back until the next poll.
+  `FanSpeedStatus()` now takes both speeds as optional; positional calls are
+  unchanged.
+
 ## v0.4.2
 
 - **A negative outdoor temperature is no longer read as 128 or more.** The
