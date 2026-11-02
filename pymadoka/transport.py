@@ -61,9 +61,10 @@ class Transport:
 
     def clear(self):
         """
-        Clear the list of chunks
+        Clear the list of chunks and the sequence, discarding any partial message
         """
         self.chunks.clear()
+        self.last_id = None
 
 
     def is_message_complete(self) -> bool:
@@ -98,10 +99,14 @@ class Transport:
         
         chunk_id = chunk[0]
         
-        if self.last_id is not None and chunk_id <= self.last_id:
-            logger.debug("Chunks of a new message received while rebuilding another message. Discarding previous chunks...") 
-            out = self.chunks_data()
-            self.delegate.response_failed(out)
+        if chunk_id == 0:
+            if self.chunks:
+                logger.debug("Chunks of a new message received while rebuilding another message. Discarding previous chunks...") 
+                out = self.chunks_data()
+                self.delegate.response_failed(out)
+        elif self.last_id is None or chunk_id != self.last_id + 1:
+            logger.debug(f"Chunk #{chunk_id} out of sequence (last #{self.last_id}). Discarding it...")
+            return
 
 
         self.last_id = chunk[0]

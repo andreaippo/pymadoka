@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A reply left incomplete no longer fails the next request.** When a reply
+  lost its last chunk (a query that timed out, or a link that dropped mid-
+  reply), its first chunks stayed in the transport. The next reply for the
+  same command flushed them as a failed message, and that failure cancelled
+  the head pending request of the command: the new one, which was about to
+  succeed. The caller got "connection lost" with the link up, and the real
+  reply then arrived with nobody waiting for it. A leftover partial is now
+  dropped when a command is sent and when the link drops, and an incomplete
+  message is logged and discarded instead of cancelling a request. Chunks are
+  also checked in sequence: only chunk 0 starts a message and only the next id
+  continues it, so a repeated or skipped chunk is dropped instead of restarting
+  the message.
 - **A command whose link is gone fails at once instead of after 10 s.** A
   request waiting for its response when the link dropped, or when the
   connection was cleaned up, was never failed: the caller held the operation

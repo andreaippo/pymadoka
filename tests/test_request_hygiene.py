@@ -129,7 +129,8 @@ async def test_a_reply_skips_futures_that_are_already_done():
 
 
 @pytest.mark.asyncio
-async def test_a_failed_reply_skips_futures_that_are_already_done():
+async def test_a_failed_reply_leaves_the_waiting_request_alone():
+    """An incomplete reply is stale: the request waiting is a newer one."""
     conn = make_connection()
     loop = asyncio.get_running_loop()
     abandoned, waiting = loop.create_future(), loop.create_future()
@@ -138,5 +139,5 @@ async def test_a_failed_reply_skips_futures_that_are_already_done():
 
     conn.response_failed(power_response(0x0020))
 
-    assert waiting.cancelled()
-    assert conn.requests[0x0020] == []
+    assert not waiting.done()
+    assert conn.requests[0x0020] == [abandoned, waiting]

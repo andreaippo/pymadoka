@@ -354,6 +354,8 @@ class Connection(TransportDelegate):
         # authentication".
         self._paired = False
         self._fail_all_requests()
+        # A partial response cannot be completed over a new link.
+        self.transport.clear()
         logger.info(f"Disconnected {self.address}")
         if self.reconnect and not self._is_starting and not self._closing:
             # Fire-and-forget reconnect goes through _background_start so a
@@ -928,6 +930,12 @@ class Connection(TransportDelegate):
         chunks = self.transport.split_in_chunks(payload)
         sent = 0
 
+        # send() runs under the operation lock, so any partial response still
+        # held belongs to an earlier exchange (e.g. a timed-out query that lost
+        # its tail chunk). Drop it now, or the reply to this request would flush
+        # it through response_failed().
+        self.transport.clear()
+
         self.current_cmd_id = cmd_id
         for chunknum, chunk in enumerate(chunks):
             for i in range(0, SEND_MAX_TRIES):
@@ -982,19 +990,10 @@ class Connection(TransportDelegate):
                 return
 
     def response_failed(self, data: bytearray):
-        if len(data) <= 4:
-            return
-
-        cmd_id = self.bytes_to_cmd_id(data)
-
-        if cmd_id not in self.requests:
-            return
-
-        while self.requests[cmd_id]:
-            req = self.requests[cmd_id].pop(0)
-            if not req.done():
-                req.cancel()
-                return
+        # An incomplete response is dropped, not matched to a request: the
+        # pending request of that cmd_id is a newer one whose reply is still on
+        # its way. A request that really gets no reply fails on its own timeout.
+        logger.debug(f"Discarded incomplete response: {bytes(data).hex()}")
 
     async def read_info(self) -> Dict[str, str]:
         try:
