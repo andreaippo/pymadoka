@@ -327,6 +327,19 @@ class Connection(TransportDelegate):
         except ValueError:
             pass
 
+    def _fail_all_requests(self) -> None:
+        """Cancel every pending request future.
+
+        Called when the link drops or the connection is cleaned up: no
+        response can arrive any more, so the callers unblock at once (as a
+        ConnectionException) instead of waiting out their response timeout.
+        """
+        for pending in self.requests.values():
+            for req in pending:
+                if not req.done():
+                    req.cancel()
+            pending.clear()
+
     def on_disconnect(self, client: BleakClient):
         # A failed candidate's client is never assigned to self.client; its
         # late disconnect callback must not clobber the live connection state.
@@ -340,6 +353,7 @@ class Connection(TransportDelegate):
         # Skipping pair() there fails every GATT op with "Insufficient
         # authentication".
         self._paired = False
+        self._fail_all_requests()
         logger.info(f"Disconnected {self.address}")
         if self.reconnect and not self._is_starting and not self._closing:
             # Fire-and-forget reconnect goes through _background_start so a
@@ -370,6 +384,7 @@ class Connection(TransportDelegate):
             await self.client.disconnect()
         self.connection_status = ConnectionStatus.DISCONNECTED
         self.connected_source = None
+        self._fail_all_requests()
 
     async def start(self):
         """Run the connection loop until connected or aborted.
@@ -929,13 +944,24 @@ class Connection(TransportDelegate):
                     # Propagate task cancellation instead of retrying: retrying
                     # here would un-cancel the caller (e.g. entry unload).
                     cmd_response.cancel()
+                    self.discard_request(cmd_id, cmd_response)
                     raise
                 except Exception as e:
                     logger.debug(f"Send command failed. Retrying ({i}/{SEND_MAX_TRIES}) for chunk #{chunknum} : {str(e)}")
                     await asyncio.sleep(1)
+            if sent != chunknum + 1:
+                # This chunk could not be written: the device would only get
+                # a truncated message, so do not send the rest.
+                break
 
-        if sent != len(chunks) and self.connection_status == ConnectionStatus.CONNECTED:
-            raise ConnectionException("Command chunks could not be sent")
+        if sent != len(chunks):
+            # The caller never gets this future (it gets the exception), so
+            # it cannot discard it: a queued orphan would swallow the next
+            # response for this cmd_id.
+            cmd_response.cancel()
+            self.discard_request(cmd_id, cmd_response)
+            if self.connection_status == ConnectionStatus.CONNECTED:
+                raise ConnectionException("Command chunks could not be sent")
 
         return cmd_response
 
@@ -947,11 +973,13 @@ class Connection(TransportDelegate):
 
         if cmd_id not in self.requests:
             return
-        if len(self.requests[cmd_id]) > 0:
+        # Skip futures that are already done (abandoned or cancelled): the
+        # response belongs to the oldest request still waiting.
+        while self.requests[cmd_id]:
             req = self.requests[cmd_id].pop(0)
-            if req.done():
+            if not req.done():
+                req.set_result(data)
                 return
-            req.set_result(data)
 
     def response_failed(self, data: bytearray):
         if len(data) <= 4:
@@ -962,11 +990,11 @@ class Connection(TransportDelegate):
         if cmd_id not in self.requests:
             return
 
-        if len(self.requests[cmd_id]) > 0:
+        while self.requests[cmd_id]:
             req = self.requests[cmd_id].pop(0)
-            if req.done():
+            if not req.done():
+                req.cancel()
                 return
-            req.cancel()
 
     async def read_info(self) -> Dict[str, str]:
         try:
