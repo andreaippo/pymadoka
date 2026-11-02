@@ -130,6 +130,12 @@ class Feature(ABC):
         self.connection = connection
         self.status = None
         super().__init__()
+
+    @property
+    def log_id(self) -> str:
+        """Device address and feature name, so the log lines of several
+        devices controlled from the same process can be told apart."""
+        return f"[{self.connection.address}] {self.__class__.__name__}"
     
     
     @abstractmethod
@@ -219,9 +225,9 @@ class Feature(ABC):
         cmd_id = self.query_cmd_id()
         new_status = self.new_status()
         result = await self._send_command(cmd_id, new_status.serialize())
-        logger.debug(f"{self.__class__.__name__} QUERY response received ({len(result)} bytes)")
+        logger.debug(f"{self.log_id} QUERY response received ({len(result)} bytes)")
         new_status.parse(result)
-        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
+        logger.debug(f"{self.log_id} status updated, new value:\n{json.dumps(vars(new_status), default=str)}")
         self.status = new_status
         return self.status
 
@@ -259,10 +265,10 @@ class Feature(ABC):
         """
         cmd_id = self.update_cmd_id()
         result = await self._send_command(cmd_id, update_status.serialize())
-        logger.debug(f"{self.__class__.__name__} UPDATE response received ({len(result)} bytes)")
+        logger.debug(f"{self.log_id} UPDATE response received ({len(result)} bytes)")
         response_status = self.new_status()
         response_status.parse(result)
-        logger.debug(f"{self.__class__.__name__} status updated, new value:\n{json.dumps(vars(response_status), default=str)}")
+        logger.debug(f"{self.log_id} status updated, new value:\n{json.dumps(vars(update_status), default=str)}")
         self.status = update_status
         return self.status
        
