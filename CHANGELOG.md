@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Feature and command logs name the device.** With more than one
+  thermostat on the same Home Assistant, the debug lines of each device
+  interleaved and could not be told apart. Feature logs now start with
+  `[address] ClassName` (the new `Feature.log_id`), and the payload and chunk
+  lines in `Connection.send` start with `[address]`. The line logged after a
+  successful update now shows the status written instead of the parsed
+  response, whose contents do not reflect the device state. Messages and log
+  levels are otherwise unchanged.
+
 - **A reply left incomplete no longer fails the next request.** When a reply
   lost its last chunk (a query that timed out, or a link that dropped mid-
   reply), its first chunks stayed in the transport. The next reply for the

@@ -172,16 +172,16 @@ class Controller:
                     if attempt < query_retries:
                         logger.debug(
                             f"Query attempt {attempt + 1}/{query_retries + 1} failed "
-                            f"for {var.__class__.__name__}, retrying: {str(e)}"
+                            f"for {var.log_id}, retrying: {str(e)}"
                         )
                         await asyncio.sleep(0.5)
                         continue
                     logger.warning(
-                        f"Query failed for {var.__class__.__name__} after "
+                        f"Query failed for {var.log_id} after "
                         f"{query_retries + 1} attempts, skipping: {str(e)}"
                     )
                 except Exception as e:
-                    logger.error(f"Failed to update {var.__class__.__name__}: {str(e)}")
+                    logger.error(f"Failed to update {var.log_id}: {str(e)}")
                     break
 
         if answered == 0:
