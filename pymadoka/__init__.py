@@ -4,6 +4,7 @@ from .connection import ConnectionException
 from .errors import MadokaError, PairingRequiredError, DeviceUnreachableError
 from .feature import Feature, FeatureStatus, NotImplementedException
 from .features.clean_filter import CleanFilterIndicator, CleanFilterIndicatorStatus, ResetCleanFilterTimer, ResetCleanFilterTimerStatus
+from .features.display import Display, DisplayStatus
 from .features.eye_brightness import EyeBrightness, EyeBrightnessStatus
 from .features.fanspeed import FanSpeed, FanSpeedStatus, FanSpeedEnum
 from .features.operationmode import OperationMode, OperationModeStatus, OperationModeEnum
@@ -34,6 +35,8 @@ __all__ = [
     "CleanFilterIndicatorStatus",
     "ResetCleanFilterTimer",
     "ResetCleanFilterTimerStatus",
+    "Display",
+    "DisplayStatus",
     "EyeBrightness",
     "EyeBrightnessStatus",
     "FanSpeed",

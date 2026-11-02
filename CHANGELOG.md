@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.0
+
+- **Display brightness and contrast, and the eye is the status ring.** A new
+  `Display` feature (function 0x0302, write 0x4302) reads and writes the levels
+  of the on-board display, each one byte on a 0-19 scale, as recovered from a
+  Bluetooth HCI capture of the official app:
+  - 0x32 `brightness`: the display
+  - 0x31 `contrast`: the display
+  - 0x33 `ring_brightness`: the status ring around the display
+
+  0x33 is the parameter `EyeBrightness` wrote. It dims the ring, not the
+  screen, so it now lives on `Display` under that name.
+
+  A query carries no argument and the device answers the whole block; the
+  arguments not modelled are kept in `DisplayStatus.other`. A write carries
+  only the levels that are set, one at a time as the app does, and `update()`
+  merges it into the cached status so the other two levels do not flap to
+  unknown until the next poll.
+
+  **Breaking:** `Controller.eye_brightness` is replaced by
+  `Controller.display`, so the same function is not polled twice. Read and
+  write `controller.display.status.ring_brightness` /
+  `controller.display.update(DisplayStatus(ring_brightness=n))` instead.
+  `EyeBrightness` and `EyeBrightnessStatus` are still importable, deprecated.
+
 ## v0.4.3
 
 - **The fan speeds a unit accepts are read from the device.** `FanSpeed` now

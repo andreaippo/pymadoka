@@ -1,4 +1,9 @@
 """This module contains the classes used to control the Eye Brightness feature (LED brightness of the controller).
+
+Deprecated: use `pymadoka.features.display.Display` and its `ring_brightness`.
+Parameter 0x33 is the brightness of the status ring around the display, one of
+the levels of the display feature, and the controller no longer polls this
+class. It is kept so that code building it directly keeps working.
 """
 
 from typing import Dict

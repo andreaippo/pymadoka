@@ -1,0 +1,133 @@
+"""This module contains the classes used to control the Display feature (on-board display settings)
+"""
+
+from typing import Dict
+from pymadoka.feature import Feature, FeatureStatus
+from pymadoka.connection import Connection
+
+class DisplayStatus(FeatureStatus):
+
+    """
+    This class is used to store the on-board display settings.
+
+    The device answers a query with fifteen parameters, but a write carries a
+    single one: writing the whole block is not what the official app does and
+    the meaning of most parameters is still unknown, so the ones that are not
+    set explicitly are left out of the command.
+
+    Parameter 0x33 is the status ring around the display, not the display:
+    it is what `EyeBrightness` read and wrote before this feature existed.
+
+    Attributes:
+        brightness (int): Display brightness, 0-19
+        contrast (int): Display contrast, 0-19
+        ring_brightness (int): Brightness of the status ring, 0-19
+        other (Dict[int,bytearray]): Every other parameter reported by the
+            device, keyed by parameter id, kept as read for further analysis
+    """
+
+    BRIGHTNESS_IDX = 0x32
+    CONTRAST_IDX = 0x31
+    RING_BRIGHTNESS_IDX = 0x33
+
+    MIN_LEVEL = 0
+    MAX_LEVEL = 19
+
+    def __init__(self, brightness:int = None, contrast:int = None,
+                 ring_brightness:int = None):
+        """Inits with the display settings.
+
+        Attributes:
+            brightness (int): Display brightness, 0-19, None to leave untouched
+            contrast (int): Display contrast, 0-19, None to leave untouched
+            ring_brightness (int): Status ring brightness, 0-19, None to leave
+                untouched
+        """
+        self.brightness = brightness
+        self.contrast = contrast
+        self.ring_brightness = ring_brightness
+        self.other = {}
+
+    def set_values(self, values:Dict[int,bytearray]):
+        """See base class."""
+
+        brightness = values.get(self.BRIGHTNESS_IDX)
+        if brightness:
+            self.brightness = brightness[0]
+
+        contrast = values.get(self.CONTRAST_IDX)
+        if contrast:
+            self.contrast = contrast[0]
+
+        ring_brightness = values.get(self.RING_BRIGHTNESS_IDX)
+        if ring_brightness:
+            self.ring_brightness = ring_brightness[0]
+
+        known = (self.BRIGHTNESS_IDX, self.CONTRAST_IDX, self.RING_BRIGHTNESS_IDX)
+        self.other = {k:v for k,v in values.items() if k not in known}
+
+    def get_values(self) -> Dict[int,bytearray]:
+        """See base class.
+
+        Only the attributes that were set are serialized. With none of them set
+        the command carries no parameter, which is how the device is asked for
+        the whole block.
+        """
+        values = {}
+
+        if self.brightness is not None:
+            values[self.BRIGHTNESS_IDX] = bytes([self.brightness])
+
+        if self.contrast is not None:
+            values[self.CONTRAST_IDX] = bytes([self.contrast])
+
+        if self.ring_brightness is not None:
+            values[self.RING_BRIGHTNESS_IDX] = bytes([self.ring_brightness])
+
+        return values
+
+class Display(Feature):
+
+    """
+    This class is used to control the settings of the display built in the device
+
+    Attributes:
+        status (DisplayStatus): Current status
+    """
+    def __init__(self, connection: Connection):
+        """See base class."""
+        self.status = None
+        super().__init__(connection)
+
+    def query_cmd_id(self) -> int:
+        """See base class."""
+        return 770
+
+    def update_cmd_id(self) -> int:
+        """See base class."""
+        return 17154
+
+    def new_status(self) -> FeatureStatus:
+        """See base class."""
+        return DisplayStatus()
+
+    async def update(self, update_status: FeatureStatus) -> FeatureStatus:
+        """Write the given settings, then merge them into the cached status.
+
+        The base class replaces `status` wholesale with what was written. A
+        write here carries a single parameter, as the official app does, so
+        that would blank the other two levels until the next poll and a
+        consumer reading the status in between would see them flap to unknown.
+        """
+        previous = self.status
+        await super().update(update_status)
+        if previous is not None and isinstance(update_status, DisplayStatus):
+            if update_status.brightness is None:
+                update_status.brightness = previous.brightness
+            if update_status.contrast is None:
+                update_status.contrast = previous.contrast
+            if update_status.ring_brightness is None:
+                update_status.ring_brightness = previous.ring_brightness
+            if not update_status.other:
+                update_status.other = previous.other
+        return self.status
