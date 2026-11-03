@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Opt-in command retry with short attempts.** A command used to wait once,
+  10 s, for its reply and then fail. `Connection.command_timeout` and
+  `Connection.command_max_tries` (public and mutable, like `pair_timeout`)
+  now set the length and number of attempts; only a timeout is retried, a
+  dropped link still fails at once. Defaults keep the old single 10 s
+  attempt. A reply to an attempt that timed out can still arrive; the next
+  that many replies for that command (within `stale_response_window`, 5 s)
+  are dropped so a straggler cannot answer the next request. The guard is
+  cleared when the link drops.
+
 - **The owner of reconnects can learn about a link drop at once.**
   `Connection` and `Controller` take an optional `disconnected_callback`, a
   zero-argument callable invoked when the live link drops (not on
