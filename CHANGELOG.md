@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **The owner of reconnects can learn about a link drop at once.**
+  `Connection` and `Controller` take an optional `disconnected_callback`, a
+  zero-argument callable invoked when the live link drops (not on
+  `cleanup()`/`stop()`, and not for a failed candidate's client). A caller
+  that runs with `reconnect=False`, such as Home Assistant's coordinator,
+  used to notice the drop only on its next poll, up to a whole scan interval
+  later, and every command in between failed with the link down. An
+  exception raised by the callback is logged and does not affect the
+  library's own disconnect handling.
+
 ## v0.4.2
 
 - **A negative outdoor temperature is no longer read as 128 or more.** The

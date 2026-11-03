@@ -47,7 +47,7 @@ class Controller:
         set_point (Feature): Feature used to control the fan speed
         clean_filter_indicator (Feature): Feature used to control the fan speed
     """
-    def __init__(self, address: str, adapter: str = "hci0", reconnect: bool = True, hass=None, name: str = None, candidates_callback=None, pair_timeout: float = DEFAULT_PAIR_TIMEOUT, allowed_sources_callback=None, device_type: str = DEVICE_TYPE_THERMOSTAT):
+    def __init__(self, address: str, adapter: str = "hci0", reconnect: bool = True, hass=None, name: str = None, candidates_callback=None, pair_timeout: float = DEFAULT_PAIR_TIMEOUT, allowed_sources_callback=None, device_type: str = DEVICE_TYPE_THERMOSTAT, disconnected_callback=None):
         """Inits the controller with the device address.
 
         Args:
@@ -73,6 +73,8 @@ class Controller:
                 the controller — never both, because the one that does not
                 belong costs a query round trip per poll and answers nothing
                 usable. An unknown value is treated as a thermostat.
+            disconnected_callback: zero-argument callable invoked when the
+                live link drops (not on stop()). See Connection.
         """
 
         if adapter is None:
@@ -89,6 +91,7 @@ class Controller:
             candidates_callback=candidates_callback,
             pair_timeout=pair_timeout,
             allowed_sources_callback=allowed_sources_callback,
+            disconnected_callback=disconnected_callback,
         )
 
         self.device_type = device_type
