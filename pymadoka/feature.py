@@ -19,6 +19,18 @@ class ParseException(Exception):
 class NotImplementedException(Exception):
      pass
 
+def _number(value, default):
+    """`value` if it is a real number, else `default`.
+
+    The command policy is read off whatever object the feature was given as
+    its connection; a stand-in (a test double, an older connection class) may
+    not carry it, or carry something that is not a number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return value
+
+
 class FeatureStatus(ABC):
     """
     This interface defines the methods used by the Transport to notify the result of the rebuild process.
@@ -197,8 +209,9 @@ class Feature(ABC):
             asyncio.CancelledError: The calling task was cancelled (propagated)
         """
         conn = self.connection
-        tries = max(1, int(getattr(conn, "command_max_tries", 1)))
-        timeout = getattr(conn, "command_timeout", 10.0)
+        tries = max(1, _number(getattr(conn, "command_max_tries", None), 1))
+        timeout = _number(getattr(conn, "command_timeout", None), 10.0)
+        retry_delay = _number(getattr(conn, "command_retry_delay", None), 0.15)
         timeouts = 0
         link_lost = False
         try:
@@ -213,13 +226,13 @@ class Feature(ABC):
                         f"{self.log_id} cmd {cmd_id} timed out "
                         f"(attempt {attempt}/{tries}), retrying"
                     )
-                    await asyncio.sleep(conn.command_retry_delay * attempt)
+                    await asyncio.sleep(retry_delay * attempt)
                 except (ConnectionException, ConnectionAbortedError):
                     link_lost = True
                     raise
             raise AssertionError("unreachable")
         finally:
-            if not link_lost and hasattr(conn, "arm_stale_guard"):
+            if not link_lost and timeouts and callable(getattr(conn, "arm_stale_guard", None)):
                 conn.arm_stale_guard(cmd_id, timeouts)
 
     async def _send_once(self, cmd_id:int, payload:bytearray, timeout:float) -> bytes:
