@@ -162,6 +162,10 @@ class Connection(TransportDelegate):
             path tries them in order instead of letting HA pick by RSSI.
         connected_source: source MAC of the scanner/proxy that served the
             current connection (None when unknown).
+        disconnected_callback: optional zero-argument callable invoked when
+            the live link drops (not on cleanup()). Lets a caller that owns
+            reconnects (reconnect=False) react at once instead of on its next
+            poll. Called from the BLE stack's callback, so it must not block.
         last_error: last classified MadokaError, None after a successful
             connect.
     """
@@ -178,8 +182,10 @@ class Connection(TransportDelegate):
         candidates_callback=None,
         pair_timeout: float = DEFAULT_PAIR_TIMEOUT,
         allowed_sources_callback=None,
+        disconnected_callback=None,
     ):
         self.reconnect = reconnect
+        self.disconnected_callback = disconnected_callback
         # Public and mutable: callers widen it around a user-driven pairing.
         self.pair_timeout = pair_timeout
         self.adapter = adapter
@@ -357,6 +363,14 @@ class Connection(TransportDelegate):
         # A partial response cannot be completed over a new link.
         self.transport.clear()
         logger.info(f"Disconnected {self.address}")
+        if self.disconnected_callback is not None and not self._closing:
+            # A caller's bug must not break the library's own state handling
+            # (or the background reconnect below).
+            try:
+                self.disconnected_callback()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    f"disconnected_callback failed for {self.address}")
         if self.reconnect and not self._is_starting and not self._closing:
             # Fire-and-forget reconnect goes through _background_start so a
             # typed error can never become an unhandled task exception; keep

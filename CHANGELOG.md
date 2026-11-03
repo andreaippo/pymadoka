@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The owner of reconnects can learn about a link drop at once.**
+  `Connection` and `Controller` take an optional `disconnected_callback`, a
+  zero-argument callable invoked when the live link drops (not on
+  `cleanup()`/`stop()`, and not for a failed candidate's client). A caller
+  that runs with `reconnect=False`, such as Home Assistant's coordinator,
+  used to notice the drop only on its next poll, up to a whole scan interval
+  later, and every command in between failed with the link down. An
+  exception raised by the callback is logged and does not affect the
+  library's own disconnect handling.
+
 - **Feature and command logs name the device.** With more than one
   thermostat on the same Home Assistant, the debug lines of each device
   interleaved and could not be told apart. Feature logs now start with
