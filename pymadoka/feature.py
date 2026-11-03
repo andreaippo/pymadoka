@@ -164,18 +164,59 @@ class Feature(ABC):
         pass
 
     async def _send_command(self, cmd_id:int, payload:bytearray) -> bytes:
-        """Send a command and wait for its response, with strict queue hygiene.
+        """Send a command and wait for its response, retrying a timeout.
+
+        The connection's command policy decides how long one attempt waits
+        (`command_timeout`) and how many attempts are made
+        (`command_max_tries`); the default is a single 10 s attempt. Only a
+        timeout is retried: the commands carry absolute values, so sending
+        one again is harmless. A dropped link is not retried here, it fails
+        at once so the caller can reconnect.
+
+        Every attempt that timed out may still get its reply later. The
+        connection's stale guard drops that many replies for this cmd_id, so
+        a late one cannot resolve the next request and desync the pairing of
+        requests and replies.
+
+        Raises:
+            ConnectionAbortedError: The connection is not available
+            ConnectionException: The link dropped while waiting for the response
+            asyncio.TimeoutError: No response after every attempt
+            asyncio.CancelledError: The calling task was cancelled (propagated)
+        """
+        conn = self.connection
+        tries = max(1, int(getattr(conn, "command_max_tries", 1)))
+        timeout = getattr(conn, "command_timeout", 10.0)
+        timeouts = 0
+        link_lost = False
+        try:
+            for attempt in range(1, tries + 1):
+                try:
+                    return await self._send_once(cmd_id, payload, timeout)
+                except asyncio.TimeoutError:
+                    timeouts += 1
+                    if attempt == tries:
+                        raise
+                    logger.warning(
+                        f"[{getattr(conn, 'address', None)}] {self.__class__.__name__} cmd {cmd_id} timed out "
+                        f"(attempt {attempt}/{tries}), retrying"
+                    )
+                    await asyncio.sleep(conn.command_retry_delay * attempt)
+                except (ConnectionException, ConnectionAbortedError):
+                    link_lost = True
+                    raise
+            raise AssertionError("unreachable")
+        finally:
+            if not link_lost and hasattr(conn, "arm_stale_guard"):
+                conn.arm_stale_guard(cmd_id, timeouts)
+
+    async def _send_once(self, cmd_id:int, payload:bytearray, timeout:float) -> bytes:
+        """One attempt, with strict queue hygiene.
 
         On timeout or cancellation the pending future is removed from the
         connection's request queue: leaving it there would let a late response
         resolve the abandoned future and permanently desync the FIFO pairing
         of requests and responses for this cmd_id.
-
-        Raises:
-            ConnectionAbortedError: The connection is not available
-            ConnectionException: The link dropped while waiting for the response
-            asyncio.TimeoutError: No response within 10s
-            asyncio.CancelledError: The calling task was cancelled (propagated)
         """
         if self.connection.connection_status == ConnectionStatus.ABORTED:
             raise ConnectionAbortedError("Could not send command: connection is not available")
@@ -184,7 +225,7 @@ class Feature(ABC):
         try:
             async with self.connection._operation_lock:
                 response = await self.connection.send(cmd_id, payload)
-                await asyncio.wait_for(asyncio.shield(response), timeout=10.0)
+                await asyncio.wait_for(asyncio.shield(response), timeout=timeout)
             return response.result()
         except asyncio.TimeoutError:
             if response is not None:

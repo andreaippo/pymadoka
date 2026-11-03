@@ -50,6 +50,12 @@ DEFAULT_PAIR_TIMEOUT = 8.0
 UNBONDED_PATH_ROUNDS = 3
 
 
+# Command retry defaults; see Connection.command_timeout.
+DEFAULT_COMMAND_TIMEOUT = 10.0
+COMMAND_RETRY_DELAY = 0.15
+STALE_RESPONSE_WINDOW = 5.0
+
+
 class ConnectionException(MadokaError):
     """Generic connection/protocol failure (legacy name, kept for compat)."""
     pass
@@ -224,6 +230,21 @@ class Connection(TransportDelegate):
         # Fire-and-forget cleanup tasks: keep a reference so they cannot be
         # garbage-collected mid-flight.
         self._bg_tasks: set = set()
+        # Command retry policy, read by Feature on every command. Public and
+        # mutable like pair_timeout. The defaults keep the historical
+        # behaviour: one attempt, 10 s for the reply. A caller that prefers
+        # short attempts (a lost notification is retried after
+        # command_timeout instead of blocking for one long wait) raises
+        # command_max_tries and lowers command_timeout, e.g. 3 x 2 s.
+        self.command_timeout = DEFAULT_COMMAND_TIMEOUT
+        self.command_max_tries = 1
+        self.command_retry_delay = COMMAND_RETRY_DELAY
+        # Replies of attempts that timed out may still arrive. Without a
+        # guard such a late reply resolves the NEXT request for the same
+        # cmd_id and every later reply is one behind. Maps cmd_id ->
+        # (replies still to drop, loop time the guard expires).
+        self.stale_response_window = STALE_RESPONSE_WINDOW
+        self._stale_guard: dict = {}
 
     @property
     def pairing_timeout_rounds(self) -> int:
@@ -327,6 +348,29 @@ class Connection(TransportDelegate):
         except ValueError:
             pass
 
+    def arm_stale_guard(self, cmd_id: int, count: int) -> None:
+        """Drop the next `count` replies for `cmd_id` (within the stale
+        window): they belong to attempts that timed out, not to whatever
+        request for that cmd_id comes next."""
+        if count <= 0:
+            return
+        expiry = asyncio.get_event_loop().time() + self.stale_response_window
+        self._stale_guard[cmd_id] = (count, expiry)
+
+    def _drop_as_stale(self, cmd_id: int) -> bool:
+        guard = self._stale_guard.get(cmd_id)
+        if guard is None:
+            return False
+        remaining, expiry = guard
+        if asyncio.get_event_loop().time() >= expiry:
+            del self._stale_guard[cmd_id]
+            return False
+        if remaining > 1:
+            self._stale_guard[cmd_id] = (remaining - 1, expiry)
+        else:
+            del self._stale_guard[cmd_id]
+        return True
+
     def _fail_all_requests(self) -> None:
         """Cancel every pending request future.
 
@@ -339,6 +383,8 @@ class Connection(TransportDelegate):
                 if not req.done():
                     req.cancel()
             pending.clear()
+        # Late replies cannot cross over to a new link.
+        self._stale_guard.clear()
 
     def on_disconnect(self, client: BleakClient):
         # A failed candidate's client is never assigned to self.client; its
@@ -970,6 +1016,10 @@ class Connection(TransportDelegate):
             return
 
         cmd_id = self.bytes_to_cmd_id(data)
+
+        if self._drop_as_stale(cmd_id):
+            logger.debug(f"[{self.address}] Dropping late reply of a timed-out cmd {cmd_id}")
+            return
 
         if cmd_id not in self.requests:
             return
